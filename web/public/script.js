@@ -134,11 +134,12 @@ function renderGraph(graphData) {
         };
     }));
     
-    // Map edges
+    // Map edges - disable smooth edges for massive performance boost
     const edgesDataSet = new vis.DataSet(graphData.edges.map(e => ({
         from: e.source,
         to: e.target,
-        color: { color: 'rgba(255,255,255,0.15)', highlight: '#ec4899' }
+        color: { color: 'rgba(255,255,255,0.1)', highlight: '#ec4899' },
+        smooth: false // Disabled curve calculations
     })));
     
     const data = { nodes: nodesDataSet, edges: edgesDataSet };
@@ -146,18 +147,28 @@ function renderGraph(graphData) {
     const options = {
         nodes: {
             font: { color: '#f8fafc', size: 12, face: 'Inter' },
-            color: { background: '#8b5cf6', border: 'transparent', highlight: { background: '#ec4899', border: '#fff' } }
+            color: { background: '#8b5cf6', border: 'transparent', highlight: { background: '#ec4899', border: '#fff' } },
+            shape: 'dot',
+            size: 8
+        },
+        edges: {
+            smooth: false
         },
         physics: {
-            forceAtlas2Based: { gravitationalConstant: -80, centralGravity: 0.01, springLength: 80, springConstant: 0.08 },
+            forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.01, springLength: 100, springConstant: 0.08, damping: 0.4 },
             solver: 'forceAtlas2Based',
-            stabilization: { iterations: 150 }
+            stabilization: { enabled: true, iterations: 150, updateInterval: 25 }
         },
-        interaction: { hover: true, tooltipDelay: 200 }
+        interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true }
     };
     
     if (networkInstance) {
         networkInstance.destroy();
     }
     networkInstance = new vis.Network(container, data, options);
+    
+    // Disable physics calculations after initial arrangement to prevent browser freeze
+    networkInstance.on("stabilizationIterationsDone", function () {
+        networkInstance.setOptions({ physics: false });
+    });
 }
