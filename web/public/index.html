@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus | Neural Image Engine</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- vis-network for Graph Visualization -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+</head>
+<body>
+    <div class="background-globes">
+        <div class="globe globe-1"></div>
+        <div class="globe globe-2"></div>
+    </div>
+
+    <main class="app-container">
+        <header>
+            <h1 class="gradient-text">Nexus API</h1>
+            <p>HNSW Accelerated Reverse Image Matcher</p>
+        </header>
+
+        <section class="glass-card upload-section">
+            <form id="search-form">
+                <div class="input-group">
+                    <label for="datasetPath">Dataset Local Folder Path</label>
+                    <input type="text" id="datasetPath" name="datasetPath" placeholder="e.g. C:\Images\Dataset" required>
+                </div>
+                <div class="upload-wrapper">
+                    <label for="queryImage" class="file-label">
+                        <div class="upload-icon">⬆</div>
+                        <span>Select Query Image</span>
+                    </label>
+                    <input type="file" id="queryImage" name="queryImage" accept="image/*" required>
+                    <div id="file-name-display">No file selected</div>
+                </div>
+                <button type="submit" class="submit-btn" id="submit-btn">
+                    <span class="btn-text">Initiate Scan</span>
+                    <span class="loader hidden"></span>
+                </button>
+            </form>
+        </section>
+
+        <section class="results-container hidden" id="results-container">
+            <div class="graph-section glass-card">
+                <h2>Neural Web Map</h2>
+                <div id="network-canvas"></div>
+            </div>
+            
+            <div class="matches-section">
+                <h2>Top Matches</h2>
+                <div class="matches-grid" id="matches-grid">
+                    <!-- Cards injected via JS -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>

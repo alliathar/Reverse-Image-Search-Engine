@@ -211,3 +211,53 @@ std::vector<uint64_t> HNSWIndex::search(uint64_t queryHash, int k, int efSearch)
 
     return result;
 }
+
+#include <sstream>
+
+std::string escapeJSONString(const std::string& input) {
+    std::string output = "";
+    for (char c : input) {
+        if (c == '"') output += "\\\"";
+        else if (c == '\\') output += "\\\\";
+        else if (c == '\b') output += "\\b";
+        else if (c == '\f') output += "\\f";
+        else if (c == '\n') output += "\\n";
+        else if (c == '\r') output += "\\r";
+        else if (c == '\t') output += "\\t";
+        else output += c;
+    }
+    return output;
+}
+
+std::string HNSWIndex::exportGraphJSON(const std::unordered_map<uint64_t, std::string>& idToPath) const {
+    std::stringstream ss;
+    ss << "{\n  \"nodes\": [\n";
+    bool firstNode = true;
+    for (const auto& pair : nodes_) {
+        if (!firstNode) ss << ",\n";
+        firstNode = false;
+        
+        uint64_t id = pair.first;
+        auto node = pair.second;
+        
+        std::string path = idToPath.count(id) ? idToPath.at(id) : "unknown";
+        ss << "    {\"id\": " << id << ", \"path\": \"" << escapeJSONString(path) << "\", \"layer\": " << node->maxLayer << "}";
+    }
+    ss << "\n  ],\n  \"edges\": [\n";
+    
+    bool firstEdge = true;
+    for (const auto& pair : nodes_) {
+        uint64_t sourceId = pair.first;
+        auto node = pair.second;
+        
+        for (int layer = 0; layer <= node->maxLayer; ++layer) {
+            for (uint64_t targetId : node->neighbors[layer]) {
+                if (!firstEdge) ss << ",\n";
+                firstEdge = false;
+                ss << "    {\"source\": " << sourceId << ", \"target\": " << targetId << ", \"layer\": " << layer << "}";
+            }
+        }
+    }
+    ss << "\n  ]\n}";
+    return ss.str();
+}

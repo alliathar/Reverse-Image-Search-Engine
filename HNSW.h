@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <memory>
 #include <cmath>
+#include <string>
 
 // O(1) Hamming distance for 64-bit integers
 #ifdef _MSC_VER
@@ -45,6 +46,9 @@ public:
     
     // K-NN Search using a greedy algorithm down through layers
     std::vector<uint64_t> search(uint64_t queryHash, int k, int efSearch = 50);
+
+    // Export graph topology to a JSON string for visualization
+    std::string exportGraphJSON(const std::unordered_map<uint64_t, std::string>& idToPath) const;
 
     // Get number of nodes
     size_t size() const { return nodes_.size(); }
