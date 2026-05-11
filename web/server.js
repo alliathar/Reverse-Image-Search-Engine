@@ -111,7 +111,13 @@ function defaultBrowsePath() {
     candidates.push(os.homedir());
 
     for (const p of candidates) {
-        try { if (fs.statSync(p).isDirectory()) return p; } catch {}
+        try {
+            if (!fs.statSync(p).isDirectory()) continue;
+            // Make sure we can actually list it — otherwise the browse endpoint
+            // will EACCES on the very first open.
+            fs.accessSync(p, fs.constants.R_OK | fs.constants.X_OK);
+            return p;
+        } catch {}
     }
     return os.homedir();
 }
