@@ -2,17 +2,94 @@
 
 This is a reverse image search engine: a C++ backend (CNN feature extractor + HNSW graph) wrapped by a Node.js web UI. Images are embedded into 576-d vectors by **MobileNetV3-Small** running on **ONNX Runtime**, and the **HNSW** index searches by cosine similarity.
 
-## Prerequisites
+Setup takes ~5 minutes on a decent connection. The PyTorch download is the slow part (~200 MB).
 
-- C++17 compiler (GCC / Clang / MSVC)
-- CMake ≥ 3.10
-- Node.js ≥ 18 (includes `npm`)
-- Python 3.10+ with `pip` (only needed once, to export the model)
-- `curl` and `tar` (for downloading ONNX Runtime)
+---
 
-## 1. Download ONNX Runtime
+## 1. Install system prerequisites
 
-The C++ engine links against the prebuilt ONNX Runtime shared library. From the project root ([Reverse-Image-Search-Engine/](./)):
+You need a **C++17 compiler**, **CMake ≥ 3.10**, **Node.js ≥ 18**, **Python ≥ 3.10**, plus `curl`. Pick the section for your OS:
+
+<details>
+<summary><strong>Linux / WSL (Debian, Ubuntu)</strong></summary>
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake nodejs npm python3 python3-venv python3-pip curl
+```
+
+`python3-venv` and `python3-pip` are critical — without them, `python3 -m venv` creates a broken venv with no `pip` inside.
+
+</details>
+
+<details>
+<summary><strong>Linux (Fedora, RHEL)</strong></summary>
+
+```bash
+sudo dnf install -y gcc-c++ cmake nodejs npm python3 python3-pip curl
+```
+
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+Install [Homebrew](https://brew.sh/) first if you don't have it, then:
+
+```bash
+xcode-select --install   # C++ toolchain (if not already installed)
+brew install cmake node python@3.12
+```
+
+`curl` is preinstalled on macOS.
+
+</details>
+
+<details>
+<summary><strong>Windows (native, no WSL)</strong></summary>
+
+Install each tool from its official installer:
+
+- **Visual Studio Build Tools 2022** with the "Desktop development with C++" workload — provides the MSVC compiler.
+- **CMake** — https://cmake.org/download/ (add to PATH during install).
+- **Node.js LTS** — https://nodejs.org/ (the installer adds it to PATH automatically).
+- **Python 3.10+** — https://www.python.org/downloads/ (check "Add Python to PATH" during install).
+- **Git for Windows** — https://git-scm.com/download/win (provides `bash`, `curl`, and `tar` via Git Bash).
+
+Run all subsequent commands inside **Git Bash** so the shell snippets below work identically. PowerShell works too but the `curl | tar` pipe needs adjustment — see notes in the ONNX Runtime step.
+
+</details>
+
+<details>
+<summary><strong>Windows (recommended: WSL)</strong></summary>
+
+Install WSL with Ubuntu, then follow the Linux/WSL section above. This is the smoothest path on Windows.
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+</details>
+
+Verify everything is on PATH:
+
+```bash
+g++ --version    # or cl on native Windows
+cmake --version
+node --version
+npm --version
+python3 --version
+curl --version
+```
+
+---
+
+## 2. Download ONNX Runtime
+
+The C++ engine links against a prebuilt ONNX Runtime shared library. From the project root:
+
+<details open>
+<summary><strong>Linux x64 / WSL</strong></summary>
 
 ```bash
 mkdir -p third_party
@@ -21,95 +98,177 @@ curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/onnxr
 mv third_party/onnxruntime-linux-x64-1.20.0 third_party/onnxruntime
 ```
 
-You should now have headers at [third_party/onnxruntime/include/](./third_party/onnxruntime/include/) and the shared library at [third_party/onnxruntime/lib/libonnxruntime.so](./third_party/onnxruntime/lib/). The CMake config in [CMakeLists.txt](./CMakeLists.txt) bakes this path into the binary's RPATH, so no `LD_LIBRARY_PATH` is needed at runtime.
+</details>
 
-For macOS or Windows, grab the corresponding tarball from the [ONNX Runtime releases page](https://github.com/microsoft/onnxruntime/releases/tag/v1.20.0) instead.
+<details>
+<summary><strong>macOS (Apple Silicon — M1/M2/M3)</strong></summary>
 
-## 2. Export the CNN model
+```bash
+mkdir -p third_party
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/onnxruntime-osx-arm64-1.20.0.tgz \
+  | tar -xz -C third_party/
+mv third_party/onnxruntime-osx-arm64-1.20.0 third_party/onnxruntime
+```
 
-A one-time Python script downloads MobileNetV3-Small from torchvision and writes it as a self-contained ONNX file.
+</details>
+
+<details>
+<summary><strong>macOS (Intel)</strong></summary>
+
+```bash
+mkdir -p third_party
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/onnxruntime-osx-x86_64-1.20.0.tgz \
+  | tar -xz -C third_party/
+mv third_party/onnxruntime-osx-x86_64-1.20.0 third_party/onnxruntime
+```
+
+</details>
+
+<details>
+<summary><strong>Windows x64</strong></summary>
+
+In **Git Bash**:
+
+```bash
+mkdir -p third_party
+curl -L -o /tmp/ort.zip \
+  https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/onnxruntime-win-x64-1.20.0.zip
+unzip /tmp/ort.zip -d third_party/
+mv third_party/onnxruntime-win-x64-1.20.0 third_party/onnxruntime
+```
+
+On Windows the binary will need `onnxruntime.dll` (in `third_party/onnxruntime/lib/`) discoverable at runtime. The simplest fix is to copy it next to the built `ReverseImageSearch.exe` after step 4.
+
+</details>
+
+You should now have headers at `third_party/onnxruntime/include/` and the shared library at `third_party/onnxruntime/lib/`.
+
+---
+
+## 3. Export the CNN model
+
+A one-time Python script downloads MobileNetV3-Small from torchvision and writes a self-contained ONNX file.
 
 ```bash
 python3 -m venv .export_venv
+
+# Linux / macOS
 .export_venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 .export_venv/bin/pip install onnx onnxscript
 .export_venv/bin/python scripts/export_model.py
 ```
 
-This produces [models/mobilenetv3_small.onnx](./models/) (≈3.7 MB). The export script is in [scripts/export_model.py](./scripts/export_model.py) — the model strips the classifier and exposes pooled 576-d features.
+<details>
+<summary><strong>Windows (Git Bash) — different venv path</strong></summary>
 
-## 3. Build the C++ engine
+On Windows, the venv puts executables under `Scripts/` instead of `bin/`:
+
+```bash
+python -m venv .export_venv
+.export_venv/Scripts/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.export_venv/Scripts/pip install onnx onnxscript
+.export_venv/Scripts/python scripts/export_model.py
+```
+
+</details>
+
+This produces `models/mobilenetv3_small.onnx` (≈3.7 MB). The script strips the classifier and exposes pooled 576-d features.
+
+You can delete `.export_venv/` after this step if disk space matters — it's only needed when re-exporting the model.
+
+---
+
+## 4. Build the C++ engine
 
 ```bash
 mkdir -p build
 cd build
 cmake ..
 cmake --build . --config Release
+cd ..
 ```
 
-This produces the `ReverseImageSearch` executable inside [build/](./build/) (`.exe` on Windows). Build flags `-O3 -march=native` are set in [CMakeLists.txt](./CMakeLists.txt).
+This produces the `ReverseImageSearch` executable inside `build/` (`.exe` on Windows). Build flags `-O3 -march=native` are set in `CMakeLists.txt`.
+
+**Windows extra step:** copy `onnxruntime.dll` next to the executable so it's found at runtime:
+
+```bash
+cp third_party/onnxruntime/lib/onnxruntime.dll build/Release/   # adjust path if CMake put the .exe elsewhere
+```
 
 ### Backend selection
 
 The HNSW index is templated and supports two backends:
 
-- **CNN embeddings** (default) — MobileNetV3-Small features + cosine distance. Requires steps 1 and 2.
+- **CNN embeddings** (default) — MobileNetV3-Small features + cosine distance. Requires steps 2 and 3.
 - **pHash** (legacy) — 64-bit DCT pHash + Hamming distance. Pure C++, no ONNX dependency.
 
-To compile the pHash backend instead, pass `-DUSE_PHASH=ON` to CMake:
+To compile the pHash backend, skip steps 2 and 3 and pass `-DUSE_PHASH=ON`:
 
 ```bash
 cmake -DUSE_PHASH=ON ..
 cmake --build .
 ```
 
-The CMake status line will print the active backend, and you can skip steps 1 and 2 entirely if you only want pHash.
+The CMake status line prints the active backend.
 
 The binary is a **long-running process** driven by stdin commands:
 
-- `LOAD <dataset_path>` — recursively scans the folder, embeds every image, and builds one HNSW index per subfolder (treated as a category). Prints `{"status":"ready","count":N,"graph":{...}}`.
-- `SEARCH <query_image> [category]` — embeds the query image and returns the top 12 nearest neighbors. Prints `{"results":[...]}`.
+- `LOAD <dataset_path>` — recursively scans the folder, embeds every image, builds one HNSW index per subfolder (treated as a category). Prints `{"status":"ready","count":N,"graph":{...}}`.
+- `SEARCH <query_image> [category]` — embeds the query, returns the top 12 nearest neighbors. Prints `{"results":[...]}`.
 
-You normally don't call it directly — the Node server spawns it once and pipes commands to it (see [web/server.js](./web/server.js)).
+You normally don't run it directly — the Node server spawns it once and pipes commands.
 
-## 4. Install web dependencies
+---
+
+## 5. Install web dependencies
 
 ```bash
 cd web
 npm install
 ```
 
-Dependencies: `express`, `multer`, `cors` (see [web/package.json](./web/package.json)).
+Dependencies: `express`, `multer`, `cors` (see `web/package.json`).
 
-## 5. Run the server
+---
 
-Still inside [web/](./web):
+## 6. Run the server
 
 ```bash
 npm start
 ```
 
-The server listens on **http://localhost:3000** ([web/server.js:9](./web/server.js#L9)) and spawns the C++ engine once at startup.
+The server picks a free port automatically and prints something like:
 
-Open the URL, paste your dataset folder path, click **Load Dataset** (this triggers the CNN embedding pass — expect ~10–30 ms per image), then upload a query image and search.
+```
+Server running at http://localhost:43289
+```
+
+Open that URL, paste your dataset folder path, click **Load Dataset** (the CNN embedding pass runs once — expect ~10–30 ms per image), then upload a query image and search.
+
+---
 
 ## Project layout
 
-- [main.cpp](./main.cpp) — stdin REPL loop, owns the per-category HNSW indexes
-- [HNSW.cpp](./HNSW.cpp) / [HNSW.h](./HNSW.h) — HNSW graph index over `std::vector<float>` embeddings, cosine distance
-- [ImageProcessor.cpp](./ImageProcessor.cpp) / [ImageProcessor.h](./ImageProcessor.h) — ONNX Runtime session, image preprocessing (224×224, ImageNet normalize), inference, L2 normalization
-- [CMakeLists.txt](./CMakeLists.txt) — build config, links ONNX Runtime
-- [scripts/export_model.py](./scripts/export_model.py) — one-time PyTorch → ONNX export
-- [models/](./models/) — exported `.onnx` file (gitignored, regenerated by the script)
-- [third_party/](./third_party/) — `stb_image` (decode/resize) + ONNX Runtime (gitignored)
-- [web/](./web/) — Node/Express server and frontend in [web/public/](./web/public/)
+- `main.cpp` — stdin REPL loop, owns the per-category HNSW indexes
+- `HNSW.cpp` / `HNSW.h` — templated HNSW index, supports both Hamming and cosine distance
+- `ImageProcessor.cpp` / `ImageProcessor.h` — pHash (DCT) and CNN (ONNX Runtime) feature extractors
+- `CMakeLists.txt` — build config; `-DUSE_PHASH=ON` selects the legacy backend
+- `scripts/export_model.py` — one-time PyTorch → ONNX export
+- `models/` — exported `.onnx` file (gitignored, regenerated by the script)
+- `third_party/` — `stb_image` (decode/resize) + ONNX Runtime (gitignored)
+- `web/` — Node/Express server and frontend in `web/public/`
+
+---
 
 ## Troubleshooting
 
-- **`cmake` not found** — install CMake and re-open the terminal.
-- **`Failed to initialize ONNX model at ...`** — make sure step 2 succeeded and the file [models/mobilenetv3_small.onnx](./models/) exists. The binary looks for the model at `<exe_dir>/../models/mobilenetv3_small.onnx`.
-- **`error while loading shared libraries: libonnxruntime.so.1`** — step 1 was skipped or the path is wrong. Re-run CMake from a clean `build/` so the RPATH is re-baked.
-- **Server can't find the executable** — confirm the binary is at [build/ReverseImageSearch](./build/) and rebuild if needed.
-- **Port 3000 in use** — edit the `port` constant in [web/server.js:9](./web/server.js#L9).
-- **Large dataset feels slow to load** — CNN inference is ~10–30 ms per image on CPU. A 1000-image dataset takes 10–30 seconds. Searches are fast afterwards (the index is reused).
-- **Sketch matching still weak** — try increasing `efSearch` in [main.cpp](./main.cpp) (currently 50), or swap MobileNetV3-Small for CLIP ViT-B/32 by editing [scripts/export_model.py](./scripts/export_model.py) and re-running it. CLIP is dramatically better for cross-modal (sketch↔photo) matching.
+- **`.export_venv/bin/pip: No such file or directory` (Linux)** — `python3-venv` and/or `python3-pip` aren't installed. Run `sudo apt install -y python3-venv python3-pip`, delete the half-broken venv with `rm -rf .export_venv`, and re-run step 3.
+- **`ModuleNotFoundError: No module named 'torch'`** — the venv install in step 3 was skipped or failed silently. Re-run step 3 and watch for errors during the `pip install` lines.
+- **`cmake: command not found`** — install CMake (see step 1) and open a new terminal so PATH refreshes.
+- **`Failed to initialize ONNX model at ...`** — step 3 was skipped, or the file `models/mobilenetv3_small.onnx` is missing. The binary looks for the model at `<exe_dir>/../models/mobilenetv3_small.onnx`.
+- **`error while loading shared libraries: libonnxruntime.so.1` (Linux)** — step 2 was skipped or the directory was moved. Re-run CMake from a clean `build/` so the RPATH is re-baked.
+- **`The code execution cannot proceed because onnxruntime.dll was not found` (Windows)** — copy `onnxruntime.dll` from `third_party/onnxruntime/lib/` next to your `ReverseImageSearch.exe`.
+- **Server can't find the executable** — confirm the binary is at `build/ReverseImageSearch` (or `build/Release/ReverseImageSearch.exe` on Windows) and rebuild if needed.
+- **Large dataset feels slow to load** — CNN inference is ~10–30 ms per image on CPU. A 1000-image dataset takes 10–30 seconds. Searches are fast afterwards.
+- **Sketch matching still weak** — try raising `efSearch` in `main.cpp` (currently 50), or swap MobileNetV3-Small for CLIP ViT-B/32 in `scripts/export_model.py` and re-run it. CLIP is dramatically better for cross-modal (sketch↔photo) matching.
