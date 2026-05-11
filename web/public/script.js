@@ -117,7 +117,80 @@ function renderResults(data) {
             const hue = Math.max(150, match.accuracy * 2.5); // Just a nice gradient math
             const color = `hsl(${hue}, 80%, 60%)`;
             
+            let luminanceMatch = false;
+            let broadShapes = { total: 0, matched: 0 };
+            let horizontal = { total: 0, matched: 0 };
+            let vertical = { total: 0, matched: 0 };
+            let textures = { total: 0, matched: 0 };
+
+            if (data.queryHash && match.hash) {
+                luminanceMatch = data.queryHash[0] === match.hash[0];
+                for (let u = 0; u < 8; u++) {
+                    for (let v = 0; v < 8; v++) {
+                        if (u === 0 && v === 0) continue;
+                        
+                        let bitIndex = u * 8 + v;
+                        const isMatch = data.queryHash[bitIndex] === match.hash[bitIndex];
+                        
+                        if (u + v <= 3) {
+                            broadShapes.total++;
+                            if (isMatch) broadShapes.matched++;
+                        } else if (u <= 1 && v >= 4) {
+                            horizontal.total++;
+                            if (isMatch) horizontal.matched++;
+                        } else if (u >= 4 && v <= 1) {
+                            vertical.total++;
+                            if (isMatch) vertical.matched++;
+                        } else if (u + v >= 9) {
+                            textures.total++;
+                            if (isMatch) textures.matched++;
+                        }
+                    }
+                }
+            }
+
+            const getPercentage = (cat) => cat.total > 0 ? (cat.matched / cat.total) * 100 : 0;
+            
+            const renderFeatureRow = (icon, name, pct) => {
+                const color = `hsl(${Math.max(10, pct * 1.5)}, 80%, 50%)`;
+                return `
+                    <div class="feature-row">
+                        <div class="feature-info">
+                            <span class="feature-icon">${icon}</span>
+                            <span class="feature-name">${name}</span>
+                        </div>
+                        <div class="feature-bar-container">
+                            <div class="feature-bar">
+                                <div class="feature-fill" style="width: ${pct}%; background: ${color}"></div>
+                            </div>
+                            <span class="feature-pct">${Math.round(pct)}%</span>
+                        </div>
+                    </div>
+                `;
+            };
+
+            const featureAnalysisHTML = `
+                <div class="feature-analysis-list">
+                    <div class="feature-row">
+                        <div class="feature-info">
+                            <span class="feature-icon">☀️</span>
+                            <span class="feature-name">Luminance (Brightness)</span>
+                        </div>
+                        <div class="feature-status ${luminanceMatch ? 'match' : 'mismatch'}">
+                            ${luminanceMatch ? 'Match' : 'Mismatch'}
+                        </div>
+                    </div>
+                    ${renderFeatureRow('🏔️', 'Broad Shapes (Low Freq)', getPercentage(broadShapes))}
+                    ${renderFeatureRow('⬌', 'Horizontal Structure', getPercentage(horizontal))}
+                    ${renderFeatureRow('⬍', 'Vertical Structure', getPercentage(vertical))}
+                    ${renderFeatureRow('✨', 'Fine Textures & Edges', getPercentage(textures))}
+                </div>
+            `;
+
             card.innerHTML = `
+                <div class="expand-btn" title="View Semantic Feature Analysis">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </div>
                 <div class="match-image-container">
                     <img src="${imgSrc}" class="match-img" alt="Match" onerror="this.src='data:image/svg+xml;utf8,<svg viewBox=\\'0 0 100 100\\' xmlns=\\'http://www.w3.org/2000/svg\\'><rect width=\\'100\\' height=\\'100\\' fill=\\'#333\\'/><text x=\\'50\\' y=\\'50\\' fill=\\'#777\\' text-anchor=\\'middle\\' alignment-baseline=\\'middle\\'>Error loading</text></svg>'">
                 </div>
@@ -131,9 +204,25 @@ function renderResults(data) {
                         <span class="accuracy-text" style="color: ${color}">${match.accuracy.toFixed(1)}%</span>
                     </div>
                 </div>
+                <div class="metric-details">
+                    <div class="metric-header">
+                        <span>Feature Match Analysis</span>
+                    </div>
+                    ${featureAnalysisHTML}
+                </div>
             `;
 
             matchesGrid.appendChild(card);
+            
+            // Toggle metric details
+            const expandBtn = card.querySelector('.expand-btn');
+            const metricDetails = card.querySelector('.metric-details');
+            if (expandBtn && metricDetails) {
+                expandBtn.addEventListener('click', () => {
+                    expandBtn.classList.toggle('active');
+                    metricDetails.classList.toggle('expanded');
+                });
+            }
             
             // Trigger animation slightly delayed
             setTimeout(() => {
