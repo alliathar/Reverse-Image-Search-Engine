@@ -49,7 +49,7 @@ std::priority_queue<std::pair<uint32_t, uint64_t>> HNSWIndex::searchLayer(
     visited.insert(entryPoint);
 
     while (!candidates.empty()) {
-        auto current = candidates.top();
+        auto current = candidates.top(); // Get the nearest unexplored node
         candidates.pop();
 
         uint32_t lowerBound = topResults.top().first;
@@ -66,6 +66,7 @@ std::priority_queue<std::pair<uint32_t, uint64_t>> HNSWIndex::searchLayer(
                 auto neighborNode = nodes_[neighborId];
                 uint32_t neighborDist = computeHammingDistance(queryHash, neighborNode->hash);
 
+                // Add this node to max heap, if there is space OR if it is closer than the furthest node in the heap
                 if (topResults.size() < ef || neighborDist < topResults.top().first) {
                     candidates.emplace(neighborDist, neighborId);
                     topResults.emplace(neighborDist, neighborId);

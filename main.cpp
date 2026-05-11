@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
         auto results = index.search(queryHash, 12, 50); // Get top 12 matches
         
         // 3. Prepare JSON Output
-        std::cout << "{\n  \"results\": [\n";
+        std::cout << "{\n  \"queryHash\": \"" << std::bitset<64>(queryHash).to_string() << "\",\n  \"results\": [\n";
         bool first = true;
         for (uint64_t resId : results) {
             if (!first) std::cout << ",\n";
@@ -76,7 +76,8 @@ int main(int argc, char* argv[]) {
             std::cout << "    {\"id\": " << resId 
                       << ", \"path\": \"" << escapeJSONString(idToPath[resId]) 
                       << "\", \"distance\": " << distance 
-                      << ", \"accuracy\": " << accuracy << "}";
+                      << ", \"accuracy\": " << accuracy 
+                      << ", \"hash\": \"" << std::bitset<64>(idToHash[resId]).to_string() << "\"}";
         }
         std::cout << "\n  ],\n";
         

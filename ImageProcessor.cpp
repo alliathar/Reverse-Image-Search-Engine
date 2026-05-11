@@ -32,7 +32,7 @@ std::vector<float> ImageProcessor::loadAndPreprocess(const std::string& filepath
                               resized_img.data(), RESIZE_WIDTH, RESIZE_HEIGHT, 0,
                               (stbir_pixel_layout)1); // STBIR_1CHANNEL = 1 in enum
 
-    stbi_image_free(img);
+    stbi_image_free(img); // Deallocate Memory
 
     std::vector<float> float_pixels(RESIZE_WIDTH * RESIZE_HEIGHT);
     for (size_t i = 0; i < resized_img.size(); ++i) {
@@ -78,11 +78,12 @@ uint64_t ImageProcessor::computeHashFromPixels(const std::vector<float>& pixels)
     dct_flat.reserve(DCT_SIZE * DCT_SIZE - 1);
     for (int u = 0; u < DCT_SIZE; ++u) {
         for (int v = 0; v < DCT_SIZE; ++v) {
-            if (u == 0 && v == 0) continue;
+            if (u == 0 && v == 0) continue; 
             dct_flat.push_back(dct_result[u * DCT_SIZE + v]);
         }
     }
 
+    // Partially to get median: takes O(n) time comapred to O(nlogn) for sorting
     std::nth_element(dct_flat.begin(), dct_flat.begin() + dct_flat.size() / 2, dct_flat.end());
     float median = dct_flat[dct_flat.size() / 2];
 
