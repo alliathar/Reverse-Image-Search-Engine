@@ -154,6 +154,7 @@ function renderResults(data) {
                 </div>
                 <div class="match-details">
                     <div class="match-path" title="${match.path}">${fileName}</div>
+                    <div style="font-size: 0.75rem; color: var(--primary); margin-bottom: 0.5rem; display: inline-block; padding: 2px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; font-weight: 600; text-transform: capitalize;">${match.category || 'uncategorized'}</div>
                     <div class="accuracy-gauge">
                         <div class="accuracy-bar">
                             <div class="accuracy-fill" style="width: 0%; background: ${color}"></div>

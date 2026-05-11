@@ -26,12 +26,13 @@ app.post('/api/search', upload.single('queryImage'), (req, res) => {
 
     const queryImagePath = req.file.path;
     const datasetPath = req.body.datasetPath;
+    const category = req.body.category || 'all';
 
     // Path to compiled C++ Executable
     const exePath = path.join(__dirname, '..', 'build', 'ReverseImageSearch.exe');
     
     // We allow up to 50MB of buffer because the graph JSON could be large for large datasets
-    execFile(exePath, ['search', queryImagePath, datasetPath], { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
+    execFile(exePath, ['search', queryImagePath, datasetPath, category], { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
         // Clean up the uploaded file
         fs.unlink(queryImagePath, () => {});
 
