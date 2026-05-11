@@ -210,7 +210,7 @@ searchForm.addEventListener('submit', async (e) => {
         }
         
         const data = await response.json();
-        renderResults(data);
+        renderResults(data, mode);
     } catch (error) {
         console.error("Search failed:", error);
         alert(`Search failed: ${error.message}`);
@@ -275,13 +275,42 @@ graphToggle.addEventListener('click', () => {
     }
 });
 
-function renderResults(data) {
+function renderResults(data, mode) {
     matchesGrid.innerHTML = '';
     
     // Filter out null/invalid items if any
     const validResults = (data.results || []).filter(r => r && r.path);
     
+    const uniquenessWidget = document.getElementById('uniqueness-widget');
+    const uniquenessValue = document.getElementById('uniqueness-value');
+    const gaugeFill = document.getElementById('gauge-fill');
+    const uniquenessDesc = document.getElementById('uniqueness-desc');
+
     if (validResults.length > 0) {
+        // Show uniqueness widget ONLY for normal or category searches
+        if (mode === 'normal' || mode === 'category') {
+            uniquenessWidget.classList.remove('hidden');
+            const bestMatchAccuracy = validResults[0].accuracy || 0;
+            const uniqueness = Math.max(0, 100 - bestMatchAccuracy);
+            
+            uniquenessValue.textContent = `${uniqueness.toFixed(1)}%`;
+            const strokeOffset = 126 - (126 * uniqueness / 100);
+            gaugeFill.style.strokeDashoffset = strokeOffset;
+            
+            if (uniqueness > 70) {
+                gaugeFill.style.stroke = '#10b981'; // Green
+                uniquenessDesc.textContent = 'Highly unique. No similar images found in dataset.';
+            } else if (uniqueness > 30) {
+                gaugeFill.style.stroke = '#f59e0b'; // Yellow
+                uniquenessDesc.textContent = 'Somewhat unique. Has some similar features in dataset.';
+            } else {
+                gaugeFill.style.stroke = '#ef4444'; // Red
+                uniquenessDesc.textContent = 'Not unique. Very similar images exist in dataset.';
+            }
+        } else {
+            uniquenessWidget.classList.add('hidden');
+        }
+
         validResults.forEach((match, index) => {
             const card = document.createElement('div');
             card.className = 'match-card';
@@ -412,6 +441,7 @@ function renderResults(data) {
             }, 100 + index * 50);
         });
     } else {
+        if (uniquenessWidget) uniquenessWidget.classList.add('hidden');
         matchesGrid.innerHTML = '<p style="color: var(--text-secondary)">No matches were found.</p>';
     }
     

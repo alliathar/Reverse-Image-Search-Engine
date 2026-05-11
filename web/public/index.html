@@ -78,6 +78,22 @@
                     <span class="query-preview-label">Your query</span>
                     <div class="query-thumbs" id="query-thumbs"></div>
                 </div>
+                
+                <!-- New Feature: Uniqueness Widget -->
+                <div id="uniqueness-widget" class="uniqueness-card glass-card hidden">
+                    <div class="gauge-container">
+                        <svg viewBox="0 0 100 50" class="gauge">
+                            <path class="gauge-bg" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#333" stroke-width="10"/>
+                            <path id="gauge-fill" class="gauge-fill" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke-width="10"/>
+                        </svg>
+                        <div id="uniqueness-value" class="gauge-value">0%</div>
+                    </div>
+                    <div class="uniqueness-text">
+                        <h3>Dataset Uniqueness</h3>
+                        <p id="uniqueness-desc">Analyzing visual characteristics...</p>
+                    </div>
+                </div>
+
                 <div class="matches-grid" id="matches-grid">
                     <!-- Cards injected via JS -->
                 </div>
@@ -87,6 +103,7 @@
 
     <div class="modal-backdrop hidden" id="browse-modal">
         <div class="modal glass-card">
+
             <div class="modal-header">
                 <h3>Choose dataset folder</h3>
                 <button type="button" class="modal-close" id="browse-close" aria-label="Close">×</button>

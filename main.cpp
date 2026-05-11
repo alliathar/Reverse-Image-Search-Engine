@@ -10,6 +10,7 @@
 #include <cmath>
 #include "HNSW.h"
 #include "ImageProcessor.h"
+#include <bitset>
 
 namespace fs = std::filesystem;
 
@@ -77,6 +78,9 @@ int main(int /*argc*/, char* argv[]) {
     std::unordered_map<uint64_t, std::string> idToPath;
     std::unordered_map<uint64_t, std::string> idToCategory;
     std::unordered_map<std::string, std::shared_ptr<IndexT>> categoryIndexes;
+#ifndef USE_PHASH
+    std::unordered_map<uint64_t, uint64_t> idToPHash; // For UI feature analysis
+#endif
     uint64_t nextId = 0;
 
     std::string line;
@@ -91,6 +95,9 @@ int main(int /*argc*/, char* argv[]) {
             idToPath.clear();
             idToCategory.clear();
             categoryIndexes.clear();
+#ifndef USE_PHASH
+            idToPHash.clear();
+#endif
             nextId = 0;
 
             std::string datasetPath;
@@ -114,6 +121,9 @@ int main(int /*argc*/, char* argv[]) {
                             categoryIndexes[category] = std::make_shared<IndexT>(16, 32, 100);
                         }
                         categoryIndexes[category]->insert(nextId, std::move(hash));
+#ifndef USE_PHASH
+                        idToPHash[nextId] = ImageProcessor::generatePHash(pathStr);
+#endif
                         nextId++;
                     } catch (...) {
                         // Skip non-images or unreadable files
@@ -158,14 +168,42 @@ int main(int /*argc*/, char* argv[]) {
 
             // Compute / combine query hashes.
             HashT queryHash;
+#ifndef USE_PHASH
+            uint64_t queryPHashUI = 0;
+#endif
             try {
                 if (mode == "multi" && queryPaths.size() > 1) {
                     std::vector<HashT> hashes;
                     hashes.reserve(queryPaths.size());
-                    for (const auto& p : queryPaths) hashes.push_back(extractHash(p));
+#ifndef USE_PHASH
+                    std::vector<uint64_t> pHashes;
+                    pHashes.reserve(queryPaths.size());
+#endif
+                    for (const auto& p : queryPaths) {
+                        hashes.push_back(extractHash(p));
+#ifndef USE_PHASH
+                        pHashes.push_back(ImageProcessor::generatePHash(p));
+#endif
+                    }
                     queryHash = combineHashes(hashes);
+#ifndef USE_PHASH
+                    // Combine pHashes for UI
+                    std::vector<int> bitCounts(64, 0);
+                    for (uint64_t h : pHashes) {
+                        for (int i = 0; i < 64; ++i) {
+                            if (h & (1ULL << i)) bitCounts[i]++;
+                        }
+                    }
+                    int threshold = static_cast<int>(pHashes.size() + 1) / 2;
+                    for (int i = 0; i < 64; ++i) {
+                        if (bitCounts[i] >= threshold) queryPHashUI |= (1ULL << i);
+                    }
+#endif
                 } else {
                     queryHash = extractHash(queryPaths[0]);
+#ifndef USE_PHASH
+                    queryPHashUI = ImageProcessor::generatePHash(queryPaths[0]);
+#endif
                 }
             } catch (...) {
                 std::cout << "{\"error\":\"Could not read query image\"}\n" << std::flush;
@@ -175,6 +213,7 @@ int main(int /*argc*/, char* argv[]) {
             struct Match {
                 uint64_t id;
                 float distance;
+                uint64_t hash; // Always store pHash for the UI
             };
             std::vector<Match> allMatches;
             DistanceFn dfn;
@@ -196,8 +235,12 @@ int main(int /*argc*/, char* argv[]) {
                 // Linear scan: return the FURTHEST images. HNSW is built for "find closest"
                 // and can't traverse "furthest" cheaply, so we score everything.
                 for (auto& idx : targetIndexes) {
-                    for (uint64_t resId : idx->getAllIds()) {
-                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId))});
+                        for (uint64_t resId : idx->getAllIds()) {
+#ifdef USE_PHASH
+                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId)), idx->getEmbedding(resId)});
+#else
+                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId)), idToPHash[resId]});
+#endif
                     }
                 }
                 // Sort by distance descending (furthest first).
@@ -208,7 +251,11 @@ int main(int /*argc*/, char* argv[]) {
                 for (auto& idx : targetIndexes) {
                     auto results = idx->search(queryHash, 12, 50);
                     for (uint64_t resId : results) {
-                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId))});
+#ifdef USE_PHASH
+                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId)), idx->getEmbedding(resId)});
+#else
+                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId)), idToPHash[resId]});
+#endif
                     }
                 }
                 std::sort(allMatches.begin(), allMatches.end(),
@@ -237,9 +284,16 @@ int main(int /*argc*/, char* argv[]) {
                     << ",\"path\":\"" << escapeJSONString(idToPath[match.id])
                     << "\",\"category\":\"" << escapeJSONString(idToCategory[match.id])
                     << "\",\"distance\":" << match.distance
-                    << ",\"accuracy\":" << accuracy << "}";
+                    << ",\"accuracy\":" << accuracy
+                    << ",\"hash\":\"" << std::bitset<64>(match.hash).to_string() << "\"}";
             }
-            out << "]}";
+            out << "]";
+#ifdef USE_PHASH
+            out << ",\"queryHash\":\"" << std::bitset<64>(queryHash).to_string() << "\"";
+#else
+            out << ",\"queryHash\":\"" << std::bitset<64>(queryPHashUI).to_string() << "\"";
+#endif
+            out << "}";
             std::cout << out.str() << "\n" << std::flush;
         }
     }
