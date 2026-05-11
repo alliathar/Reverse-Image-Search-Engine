@@ -38,6 +38,19 @@ app.post('/api/search', upload.single('queryImage'), (req, res) => {
         if (error) {
             console.error('Execution error:', error);
             console.error('stderr:', stderr);
+            
+            // Try to extract specific error from C++ output
+            try {
+                const jsonStartOffset = stdout.indexOf('{');
+                if (jsonStartOffset !== -1) {
+                    const cleanJsonStr = stdout.substring(jsonStartOffset);
+                    const parsed = JSON.parse(cleanJsonStr);
+                    if (parsed.error) {
+                        return res.status(500).json({ error: parsed.error });
+                    }
+                }
+            } catch (e) {}
+
             return res.status(500).json({ error: 'Failed to process image search.' });
         }
 
