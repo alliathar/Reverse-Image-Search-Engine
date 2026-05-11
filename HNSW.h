@@ -58,6 +58,12 @@ public:
     std::string exportGraphJSON(const std::unordered_map<uint64_t, std::string>& idToPath) const;
     size_t size() const { return nodes_.size(); }
     const T& getEmbedding(uint64_t id) const { return nodes_.at(id)->hash; }
+    std::vector<uint64_t> getAllIds() const {
+        std::vector<uint64_t> ids;
+        ids.reserve(nodes_.size());
+        for (const auto& p : nodes_) ids.push_back(p.first);
+        return ids;
+    }
 
 private:
     int M_;

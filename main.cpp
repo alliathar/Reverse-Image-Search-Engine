@@ -3,9 +3,11 @@
 #include <string>
 #include <filesystem>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <memory>
 #include <sstream>
+#include <cmath>
 #include "HNSW.h"
 #include "ImageProcessor.h"
 
@@ -17,20 +19,49 @@ namespace fs = std::filesystem;
 #ifdef USE_PHASH
     using HashT = uint64_t;
     using IndexT = PHashHNSW;
+    using DistanceFn = HammingDistance;
     static HashT extractHash(const std::string& path) {
         return ImageProcessor::generatePHash(path);
+    }
+    // Bit-wise majority vote across N 64-bit pHashes.
+    static HashT combineHashes(const std::vector<HashT>& hashes) {
+        std::vector<int> bitCounts(64, 0);
+        for (HashT h : hashes) {
+            for (int i = 0; i < 64; ++i) {
+                if (h & (1ULL << i)) bitCounts[i]++;
+            }
+        }
+        HashT combined = 0;
+        int threshold = static_cast<int>(hashes.size() + 1) / 2;
+        for (int i = 0; i < 64; ++i) {
+            if (bitCounts[i] >= threshold) combined |= (1ULL << i);
+        }
+        return combined;
     }
 #else
     using HashT = std::vector<float>;
     using IndexT = EmbeddingHNSW;
+    using DistanceFn = CosineDistance;
     static HashT extractHash(const std::string& path) {
         return ImageProcessor::generateEmbedding(path);
+    }
+    // Element-wise mean of L2-normalized embeddings, then L2-normalize again.
+    static HashT combineHashes(const std::vector<HashT>& hashes) {
+        if (hashes.empty()) return {};
+        HashT combined(hashes[0].size(), 0.0f);
+        for (const auto& h : hashes) {
+            for (size_t i = 0; i < combined.size(); ++i) combined[i] += h[i];
+        }
+        double norm_sq = 0.0;
+        for (float v : combined) norm_sq += v * v;
+        float norm = static_cast<float>(std::sqrt(norm_sq));
+        if (norm > 1e-12f) for (float& v : combined) v /= norm;
+        return combined;
     }
 #endif
 
 int main(int /*argc*/, char* argv[]) {
 #ifndef USE_PHASH
-    // Resolve the model path relative to the executable.
     fs::path exeDir = fs::weakly_canonical(fs::path(argv[0])).parent_path();
     fs::path modelPath = exeDir / ".." / "models" / "mobilenetv3_small.onnx";
     try {
@@ -97,19 +128,45 @@ int main(int /*argc*/, char* argv[]) {
             if (!categoryIndexes.empty()) {
                 graphJSON = categoryIndexes.begin()->second->exportGraphJSON(idToPath);
             }
-            std::cout << "{\"status\":\"ready\",\"count\":" << nextId << ",\"graph\":" << graphJSON << "}\n" << std::flush;
+
+            // Collect category names sorted for the frontend dropdown.
+            std::vector<std::string> categoryNames;
+            categoryNames.reserve(categoryIndexes.size());
+            for (const auto& p : categoryIndexes) categoryNames.push_back(p.first);
+            std::sort(categoryNames.begin(), categoryNames.end());
+
+            std::ostringstream out;
+            out << "{\"status\":\"ready\",\"count\":" << nextId << ",\"categories\":[";
+            for (size_t i = 0; i < categoryNames.size(); ++i) {
+                if (i > 0) out << ",";
+                out << "\"" << escapeJSONString(categoryNames[i]) << "\"";
+            }
+            out << "],\"graph\":" << graphJSON << "}";
+            std::cout << out.str() << "\n" << std::flush;
 
         } else if (words[0] == "SEARCH") {
-            if (words.size() < 2) {
-                std::cout << "{\"error\":\"Missing query path\"}\n" << std::flush;
+            // Protocol: SEARCH <mode> <category> <path1> [<path2>...]
+            //   mode:     "normal" | "negative" | "multi"
+            //   category: "all" or specific category name
+            if (words.size() < 4) {
+                std::cout << "{\"error\":\"Usage: SEARCH <mode> <category> <path>...\"}\n" << std::flush;
                 continue;
             }
-            std::string queryPath = words[1];
-            std::string targetCategory = (words.size() > 2) ? words.back() : "all";
+            std::string mode = words[1];
+            std::string targetCategory = words[2];
+            std::vector<std::string> queryPaths(words.begin() + 3, words.end());
 
+            // Compute / combine query hashes.
             HashT queryHash;
             try {
-                queryHash = extractHash(queryPath);
+                if (mode == "multi" && queryPaths.size() > 1) {
+                    std::vector<HashT> hashes;
+                    hashes.reserve(queryPaths.size());
+                    for (const auto& p : queryPaths) hashes.push_back(extractHash(p));
+                    queryHash = combineHashes(hashes);
+                } else {
+                    queryHash = extractHash(queryPaths[0]);
+                }
             } catch (...) {
                 std::cout << "{\"error\":\"Could not read query image\"}\n" << std::flush;
                 continue;
@@ -118,34 +175,46 @@ int main(int /*argc*/, char* argv[]) {
             struct Match {
                 uint64_t id;
                 float distance;
-                bool operator<(const Match& other) const { return distance < other.distance; }
             };
             std::vector<Match> allMatches;
+            DistanceFn dfn;
 
-            auto runOnIndex = [&](IndexT& idx) {
-                auto results = idx.search(queryHash, 12, 50);
-                for (uint64_t resId : results) {
-#ifdef USE_PHASH
-                    HammingDistance dfn;
-#else
-                    CosineDistance dfn;
-#endif
-                    allMatches.push_back({resId, dfn(queryHash, idx.getEmbedding(resId))});
-                }
-            };
-
+            // Resolve which indexes to scan.
+            std::vector<std::shared_ptr<IndexT>> targetIndexes;
             if (targetCategory == "all" || targetCategory == "") {
-                for (auto& pair : categoryIndexes) runOnIndex(*pair.second);
+                for (auto& p : categoryIndexes) targetIndexes.push_back(p.second);
             } else {
                 auto it = categoryIndexes.find(targetCategory);
                 if (it == categoryIndexes.end()) {
                     std::cout << "{\"error\":\"Category not found in dataset\"}\n" << std::flush;
                     continue;
                 }
-                runOnIndex(*it->second);
+                targetIndexes.push_back(it->second);
             }
 
-            std::sort(allMatches.begin(), allMatches.end());
+            if (mode == "negative") {
+                // Linear scan: return the FURTHEST images. HNSW is built for "find closest"
+                // and can't traverse "furthest" cheaply, so we score everything.
+                for (auto& idx : targetIndexes) {
+                    for (uint64_t resId : idx->getAllIds()) {
+                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId))});
+                    }
+                }
+                // Sort by distance descending (furthest first).
+                std::sort(allMatches.begin(), allMatches.end(),
+                          [](const Match& a, const Match& b) { return a.distance > b.distance; });
+            } else {
+                // normal / multi (multi just combined the embeddings above) — HNSW nearest neighbor search.
+                for (auto& idx : targetIndexes) {
+                    auto results = idx->search(queryHash, 12, 50);
+                    for (uint64_t resId : results) {
+                        allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId))});
+                    }
+                }
+                std::sort(allMatches.begin(), allMatches.end(),
+                          [](const Match& a, const Match& b) { return a.distance < b.distance; });
+            }
+
             if (allMatches.size() > 12) allMatches.resize(12);
 
             std::ostringstream out;
@@ -155,7 +224,6 @@ int main(int /*argc*/, char* argv[]) {
                 if (!first) out << ",";
                 first = false;
 
-                // Convert raw distance to a 0-100 "accuracy" score depending on the backend.
 #ifdef USE_PHASH
                 // Hamming distance over 64 bits: 0 = identical, 64 = opposite.
                 double accuracy = ((64.0 - static_cast<double>(match.distance)) / 64.0) * 100.0;
