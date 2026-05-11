@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
+const os = require('os');
 const readline = require('readline');
 
 const app = express();
@@ -60,23 +61,85 @@ app.post('/api/load', async (req, res) => {
     }
 });
 
-// API endpoint for search
-app.post('/api/search', upload.single('queryImage'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'Missing query image.' });
+// API endpoint for search. Accepts up to 8 files for multi-image mode.
+app.post('/api/search', upload.array('queryImage', 8), async (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'Missing query image.' });
+    }
 
-    const queryImagePath = req.file.path;
+    const queryImagePaths = req.files.map(f => f.path);
+    const mode = req.body.mode || 'normal';     // normal | negative | multi
     const category = req.body.category || 'all';
 
+    // Protocol: SEARCH <mode> <category> <path1> [<path2>...]
+    const cmd = `SEARCH ${mode} ${category} ${queryImagePaths.join(' ')}`;
+    const cleanup = () => queryImagePaths.forEach(p => fs.unlink(p, () => {}));
+
     try {
-        const line = await sendCommand(`SEARCH ${queryImagePath} ${category}`);
-        fs.unlink(queryImagePath, () => {});
+        const line = await sendCommand(cmd);
+        cleanup();
         res.json(JSON.parse(line));
     } catch (e) {
-        fs.unlink(queryImagePath, () => {});
+        cleanup();
         res.status(500).json({ error: 'Failed to process image search.' });
     }
 });
 
+
+// API endpoint: list subfolders of a given directory for the folder picker.
+// Defaults to the user's home directory.
+// Find the most useful "Downloads" folder, preferring Windows Downloads under WSL.
+function defaultBrowsePath() {
+    const candidates = [];
+
+    // 1. WSL: Windows Downloads via the user's WSL login name first.
+    if (fs.existsSync('/mnt/c/Users')) {
+        const me = process.env.USER || process.env.USERNAME;
+        if (me) candidates.push(`/mnt/c/Users/${me}/Downloads`);
+        // 2. Scan /mnt/c/Users for any non-system user folder that has Downloads.
+        try {
+            const skip = new Set(['Public', 'Default', 'Default User', 'All Users']);
+            for (const name of fs.readdirSync('/mnt/c/Users')) {
+                if (skip.has(name) || name.startsWith('.')) continue;
+                candidates.push(`/mnt/c/Users/${name}/Downloads`);
+            }
+        } catch {}
+    }
+    // 3. The native ~/Downloads (Linux, macOS, native Windows).
+    candidates.push(path.join(os.homedir(), 'Downloads'));
+    // 4. Last resort.
+    candidates.push(os.homedir());
+
+    for (const p of candidates) {
+        try { if (fs.statSync(p).isDirectory()) return p; } catch {}
+    }
+    return os.homedir();
+}
+
+app.get('/api/browse', (req, res) => {
+    let target = req.query.path && req.query.path.trim();
+    if (!target) target = defaultBrowsePath();
+    try {
+        const resolved = path.resolve(target);
+        const stat = fs.statSync(resolved);
+        if (!stat.isDirectory()) {
+            return res.status(400).json({ error: 'Not a directory' });
+        }
+        const entries = fs.readdirSync(resolved, { withFileTypes: true });
+        const folders = entries
+            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+            .map(e => e.name)
+            .sort((a, b) => a.localeCompare(b));
+        const parent = path.dirname(resolved);
+        res.json({
+            path: resolved,
+            parent: parent === resolved ? null : parent,
+            folders,
+        });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
 
 // API endpoint to serve arbitrary local target images to the frontend securely
 app.get('/api/image', (req, res) => {

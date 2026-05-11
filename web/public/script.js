@@ -10,32 +10,187 @@ const loadBtn = document.getElementById('load-btn');
 const datasetPathInput = document.getElementById('datasetPath');
 const loadStatus = document.getElementById('load-status');
 const queryPreview = document.getElementById('query-preview');
-const queryPreviewImg = document.getElementById('query-preview-img');
-let lastQueryUrl = null;
+const queryThumbs = document.getElementById('query-thumbs');
+const searchModeSelect = document.getElementById('search-mode');
+const categoryGroup = document.getElementById('category-group');
+const categorySelect = document.getElementById('category');
+const uploadLabelText = document.getElementById('upload-label-text');
+const graphSection = document.getElementById('graph-section');
+const graphToggle = document.getElementById('graph-toggle');
+let lastQueryUrls = [];
+let cachedGraph = null;
+let graphRendered = false;
 
-queryImageInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        fileNameDisplay.textContent = e.target.files[0].name;
-    } else {
-        fileNameDisplay.textContent = "No file selected";
+// ----- Folder picker -----
+const browseBtn = document.getElementById('browse-btn');
+const browseModal = document.getElementById('browse-modal');
+const browseClose = document.getElementById('browse-close');
+const browseCancel = document.getElementById('browse-cancel');
+const browseSelect = document.getElementById('browse-select');
+const browseUp = document.getElementById('browse-up');
+const browseCurrent = document.getElementById('browse-current');
+const browseList = document.getElementById('browse-list');
+const browseFilter = document.getElementById('browse-filter');
+let currentFolders = [];
+let browseCurrentPath = null;
+let browseParentPath = null;
+
+async function loadFolder(targetPath) {
+    browseList.innerHTML = '<li class="folder-empty">Loading…</li>';
+    try {
+        const url = targetPath
+            ? `/api/browse?path=${encodeURIComponent(targetPath)}`
+            : '/api/browse';
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        browseCurrentPath = data.path;
+        browseParentPath = data.parent;
+        browseCurrent.textContent = data.path;
+        browseUp.disabled = !data.parent;
+
+        currentFolders = data.folders;
+        browseFilter.value = '';
+        renderBrowseList();
+        browseFilter.focus();
+    } catch (e) {
+        browseList.innerHTML = `<li class="folder-empty">Error: ${e.message}</li>`;
+    }
+}
+
+function renderBrowseList() {
+    const q = browseFilter.value.trim().toLowerCase();
+    // Score each folder. Exact prefix wins, then substring, then a loose
+    // "matches the typed letters in order" check so "dl" finds "Downloads".
+    const scored = currentFolders
+        .map(name => {
+            const lower = name.toLowerCase();
+            if (!q) return { name, score: 0 };
+            if (lower.startsWith(q)) return { name, score: 1 };
+            if (lower.includes(q)) return { name, score: 2 };
+            // Subsequence: every letter of q appears in order in lower.
+            let i = 0;
+            for (const c of lower) { if (c === q[i]) i++; if (i === q.length) break; }
+            if (i === q.length) return { name, score: 3 };
+            return null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+
+    if (scored.length === 0) {
+        browseList.innerHTML = '<li class="folder-empty">No matches</li>';
+        return;
+    }
+    browseList.innerHTML = '';
+    for (const { name } of scored) {
+        const li = document.createElement('li');
+        li.className = 'folder-item';
+        li.innerHTML = `<span class="folder-icon">📁</span> ${name}`;
+        li.addEventListener('click', () => {
+            const sep = browseCurrentPath.endsWith('/') || browseCurrentPath.endsWith('\\') ? '' : '/';
+            loadFolder(browseCurrentPath + sep + name);
+        });
+        browseList.appendChild(li);
+    }
+}
+
+function openBrowse() {
+    browseModal.classList.remove('hidden');
+    loadFolder(datasetPathInput.value || null);
+}
+function closeBrowse() {
+    browseModal.classList.add('hidden');
+}
+
+browseBtn.addEventListener('click', openBrowse);
+browseClose.addEventListener('click', closeBrowse);
+browseCancel.addEventListener('click', closeBrowse);
+browseModal.addEventListener('click', (e) => { if (e.target === browseModal) closeBrowse(); });
+browseUp.addEventListener('click', () => { if (browseParentPath) loadFolder(browseParentPath); });
+browseSelect.addEventListener('click', () => {
+    if (browseCurrentPath) {
+        datasetPathInput.value = browseCurrentPath;
+        loadBtn.disabled = false;
+        closeBrowse();
     }
 });
+
+browseFilter.addEventListener('input', renderBrowseList);
+browseFilter.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        // Open the first visible folder.
+        e.preventDefault();
+        const first = browseList.querySelector('.folder-item');
+        if (first) first.click();
+    } else if (e.key === 'Escape') {
+        if (browseFilter.value) {
+            browseFilter.value = '';
+            renderBrowseList();
+        } else {
+            closeBrowse();
+        }
+    }
+});
+
+queryImageInput.addEventListener('change', (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) {
+        fileNameDisplay.textContent = 'No file selected';
+    } else if (files.length === 1) {
+        fileNameDisplay.textContent = files[0].name;
+    } else {
+        fileNameDisplay.textContent = `${files.length} files selected`;
+    }
+});
+
+// Mode dropdown toggles category visibility and multi-file selection.
+function applyMode() {
+    const mode = searchModeSelect.value;
+    const multi = mode === 'multi';
+    const needsCategory = mode === 'category';
+
+    queryImageInput.multiple = multi;
+    uploadLabelText.textContent = multi ? 'Select Query Images' : 'Select Query Image';
+    categoryGroup.classList.toggle('hidden', !needsCategory);
+    categorySelect.required = needsCategory;
+}
+searchModeSelect.addEventListener('change', applyMode);
+applyMode();
 
 let networkInstance = null;
 
 searchForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const formData = new FormData(searchForm);
+    const mode = searchModeSelect.value;
+    const files = Array.from(queryImageInput.files);
 
-    // Preview the query image locally (revoke any previous URL to avoid leaks).
-    const file = queryImageInput.files[0];
-    if (file) {
-        if (lastQueryUrl) URL.revokeObjectURL(lastQueryUrl);
-        lastQueryUrl = URL.createObjectURL(file);
-        queryPreviewImg.src = lastQueryUrl;
-        queryPreview.classList.remove('hidden');
+    if (files.length === 0) return;
+    if (mode === 'category' && !categorySelect.value) {
+        alert('Pick a category for category-wise search.');
+        return;
     }
+
+    // Build the request payload. The backend expects `mode` to be normal/negative/multi;
+    // "category" is a UI label for normal search with a category filter.
+    const formData = new FormData();
+    formData.append('mode', mode === 'category' ? 'normal' : mode);
+    formData.append('category', (mode === 'category') ? categorySelect.value : 'all');
+    const filesToSend = (mode === 'multi') ? files : [files[0]];
+    filesToSend.forEach(f => formData.append('queryImage', f));
+
+    // Render query thumbnails (revoke any previous object URLs to avoid leaks).
+    lastQueryUrls.forEach(u => URL.revokeObjectURL(u));
+    lastQueryUrls = filesToSend.map(f => URL.createObjectURL(f));
+    queryThumbs.innerHTML = '';
+    lastQueryUrls.forEach(url => {
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = 'Query';
+        queryThumbs.appendChild(img);
+    });
+    queryPreview.classList.remove('hidden');
 
     // UI Loading state
     submitBtn.disabled = true;
@@ -83,14 +238,41 @@ loadBtn.addEventListener('click', async () => {
         if (data.error) throw new Error(data.error);
         loadStatus.textContent = `Ready — ${data.count} images loaded`;
         submitBtn.disabled = false;
-        if (data.graph) {
-            resultsContainer.classList.remove('hidden');
-            setTimeout(() => renderGraph(data.graph), 0);
-        }
+
+        // Populate the category dropdown.
+        const cats = Array.isArray(data.categories) ? data.categories : [];
+        categorySelect.innerHTML = '<option value="">Pick a category…</option>'
+            + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+        categorySelect.disabled = cats.length === 0;
+
+        // Cache the graph; user opens it explicitly with the toggle.
+        cachedGraph = data.graph || null;
+        graphRendered = false;
+        graphSection.classList.add('hidden');
+        resultsContainer.classList.add('graph-hidden');
+        graphToggle.textContent = 'Show neural map';
     } catch (e) {
         loadStatus.textContent = `Error: ${e.message}`;
     }
     loadBtn.disabled = false;
+});
+
+graphToggle.addEventListener('click', () => {
+    const isHidden = graphSection.classList.contains('hidden');
+    if (isHidden) {
+        graphSection.classList.remove('hidden');
+        resultsContainer.classList.remove('graph-hidden');
+        graphToggle.textContent = 'Hide neural map';
+        // Render the graph lazily, only the first time it's opened.
+        if (!graphRendered && cachedGraph) {
+            setTimeout(() => renderGraph(cachedGraph), 0);
+            graphRendered = true;
+        }
+    } else {
+        graphSection.classList.add('hidden');
+        resultsContainer.classList.add('graph-hidden');
+        graphToggle.textContent = 'Show neural map';
+    }
 });
 
 function renderResults(data) {

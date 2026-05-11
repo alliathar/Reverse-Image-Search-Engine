@@ -23,21 +23,35 @@
 
         <section class="glass-card upload-section">
             <div class="input-group">
-                <label for="datasetPath">Dataset Local Folder Path</label>
-                <input type="text" id="datasetPath" name="datasetPath" placeholder="e.g. /mnt/d/Images/Dataset" required>
-                <button id="load-btn" class="submit-btn">Load Dataset</button>
+                <label for="datasetPath">Dataset Folder</label>
+                <div class="path-row">
+                    <input type="text" id="datasetPath" name="datasetPath" placeholder="No folder selected" readonly>
+                    <button type="button" id="browse-btn" class="secondary-btn">Browse…</button>
+                </div>
+                <button id="load-btn" class="submit-btn" disabled>Load Dataset</button>
                 <p id="load-status"></p>
             </div>
 
             <form id="search-form">
                 <div class="input-group">
-                    <label for="category">Category (Optional)</label>
-                    <input type="text" id="category" name="category" placeholder="e.g. cars, dogs, or leave blank for all">
+                    <label for="search-mode">Search Mode</label>
+                    <select id="search-mode" name="mode">
+                        <option value="normal">Normal — closest matches across all categories</option>
+                        <option value="category">Category-wise — closest matches in one category</option>
+                        <option value="negative">Negative — furthest matches (least similar)</option>
+                        <option value="multi">Multi-Image — closest to combined query</option>
+                    </select>
+                </div>
+                <div class="input-group hidden" id="category-group">
+                    <label for="category">Category</label>
+                    <select id="category" name="category" disabled>
+                        <option value="">Load a dataset first…</option>
+                    </select>
                 </div>
                 <div class="upload-wrapper">
                     <label for="queryImage" class="file-label">
                         <div class="upload-icon">⬆</div>
-                        <span>Select Query Image</span>
+                        <span id="upload-label-text">Select Query Image</span>
                     </label>
                     <input type="file" id="queryImage" name="queryImage" accept="image/*" required>
                     <div id="file-name-display">No file selected</div>
@@ -49,17 +63,20 @@
             </form>
         </section>
 
-        <section class="results-container hidden" id="results-container">
-            <div class="graph-section glass-card">
+        <section class="results-container hidden graph-hidden" id="results-container">
+            <div class="graph-section glass-card hidden" id="graph-section">
                 <h2>Neural Web Map</h2>
                 <div id="network-canvas"></div>
             </div>
-            
+
             <div class="matches-section">
-                <h2>Top Matches</h2>
+                <div class="matches-header">
+                    <h2>Top Matches</h2>
+                    <button type="button" class="graph-toggle" id="graph-toggle">Show neural map</button>
+                </div>
                 <div class="query-preview glass-card hidden" id="query-preview">
                     <span class="query-preview-label">Your query</span>
-                    <img id="query-preview-img" alt="Query image">
+                    <div class="query-thumbs" id="query-thumbs"></div>
                 </div>
                 <div class="matches-grid" id="matches-grid">
                     <!-- Cards injected via JS -->
@@ -67,6 +84,25 @@
             </div>
         </section>
     </main>
+
+    <div class="modal-backdrop hidden" id="browse-modal">
+        <div class="modal glass-card">
+            <div class="modal-header">
+                <h3>Choose dataset folder</h3>
+                <button type="button" class="modal-close" id="browse-close" aria-label="Close">×</button>
+            </div>
+            <div class="modal-toolbar">
+                <button type="button" class="secondary-btn" id="browse-up" disabled>↑ Up</button>
+                <span class="modal-path" id="browse-current"></span>
+            </div>
+            <input type="text" id="browse-filter" class="modal-filter" placeholder="Type to filter folders…" autocomplete="off">
+            <ul class="folder-list" id="browse-list"></ul>
+            <div class="modal-footer">
+                <button type="button" class="secondary-btn" id="browse-cancel">Cancel</button>
+                <button type="button" class="submit-btn" id="browse-select">Select this folder</button>
+            </div>
+        </div>
+    </div>
 
     <script src="script.js"></script>
 </body>
