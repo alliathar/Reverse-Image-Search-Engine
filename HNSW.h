@@ -56,6 +56,7 @@ public:
 
     void insert(uint64_t id, T hash);
     void   softDelete(uint64_t id);
+    void updatePoint(uint64_t id, T newHash);
     bool   isDeleted(uint64_t id)  const { return deleted_.count(id) > 0; }
     size_t deletedCount()          const { return deleted_.size(); }
 

@@ -244,6 +244,34 @@ void HNSWIndex<T, DistanceFn>::softDelete(uint64_t id) {
 }
 
 template<typename T, typename DistanceFn>
+void HNSWIndex<T, DistanceFn>::updatePoint(uint64_t id, T newHash) {
+    if (nodes_.find(id) == nodes_.end()) return;
+
+    // Scrub stale back-references from neighbors before removing the node
+    auto oldNode = nodes_[id];
+    for (int lc = 0; lc <= oldNode->maxLayer; ++lc) {
+        for (uint64_t nbr : oldNode->neighbors[lc]) {
+            if (nodes_.find(nbr) == nodes_.end()) continue;
+            auto& nbrList = nodes_[nbr]->neighbors[lc];
+            nbrList.erase(
+                std::remove(nbrList.begin(), nbrList.end(), id),
+                nbrList.end()
+            );
+        }
+    }
+
+    // Tombstone first so softDelete can fix the entry point if needed
+    softDelete(id);
+
+    // Now safely erase — softDelete has already updated entryPointId_ if needed
+    nodes_.erase(id);
+    deleted_.erase(id);
+
+    // Re-insert with new hash as a completely fresh node
+    insert(id, std::move(newHash));
+}
+
+template<typename T, typename DistanceFn>
 std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k, int efSearch) {
     std::vector<uint64_t> result;
     if (!hasEntryPoint_) return result;
