@@ -55,6 +55,10 @@ public:
 
     void insert(uint64_t id, T hash);
     std::vector<uint64_t> search(const T& queryHash, int k, int efSearch = 50);
+    // Reverse-greedy traversal: walks to the FURTHEST neighbor at each step.
+    // Returns a local maximum of distance — not guaranteed to be the global
+    // furthest point in the dataset, because the graph is nearest-neighbor.
+    std::vector<uint64_t> searchFurthest(const T& queryHash, int k, int efSearch = 50);
     std::string exportGraphJSON(const std::unordered_map<uint64_t, std::string>& idToPath) const;
     size_t size() const { return nodes_.size(); }
     const T& getEmbedding(uint64_t id) const { return nodes_.at(id)->hash; }
@@ -82,6 +86,18 @@ private:
     int generateRandomLayer();
 
     std::priority_queue<std::pair<float, uint64_t>> searchLayer(
+        const T& queryHash,
+        uint64_t entryPoint,
+        int ef,
+        int layer
+    );
+
+    // Furthest-mode variant of searchLayer. Returns a min-heap (closest at top)
+    // so the caller can pop the closest excess down to k after the search.
+    std::priority_queue<std::pair<float, uint64_t>,
+                        std::vector<std::pair<float, uint64_t>>,
+                        std::greater<>>
+    searchLayerFurthest(
         const T& queryHash,
         uint64_t entryPoint,
         int ef,

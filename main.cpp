@@ -193,10 +193,13 @@ int main(int /*argc*/, char* argv[]) {
             }
 
             if (mode == "negative") {
-                // Linear scan: return the FURTHEST images. HNSW is built for "find closest"
-                // and can't traverse "furthest" cheaply, so we score everything.
+                // Reverse-greedy HNSW traversal. Finds a local maximum of distance
+                // rather than the true global furthest, but in practice that's fine —
+                // the result is still a strongly-dissimilar image, and the search is
+                // O(log N) instead of O(N).
                 for (auto& idx : targetIndexes) {
-                    for (uint64_t resId : idx->getAllIds()) {
+                    auto results = idx->searchFurthest(queryHash, 12, 50);
+                    for (uint64_t resId : results) {
                         allMatches.push_back({resId, dfn(queryHash, idx->getEmbedding(resId))});
                     }
                 }

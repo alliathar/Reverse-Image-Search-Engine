@@ -211,6 +211,107 @@ std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k
     return result;
 }
 
+template<typename T, typename DistanceFn>
+std::priority_queue<std::pair<float, uint64_t>,
+                    std::vector<std::pair<float, uint64_t>>,
+                    std::greater<>>
+HNSWIndex<T, DistanceFn>::searchLayerFurthest(const T& queryHash,
+                                              uint64_t entryPoint,
+                                              int ef,
+                                              int layer) {
+    // topResults: min-heap by distance — the "worst" kept is the closest one.
+    std::priority_queue<std::pair<float, uint64_t>,
+                        std::vector<std::pair<float, uint64_t>>,
+                        std::greater<>> topResults;
+    // candidates: max-heap — explore the furthest unexplored next.
+    std::priority_queue<std::pair<float, uint64_t>> candidates;
+    std::set<uint64_t> visited;
+
+    auto epNode = nodes_[entryPoint];
+    float dist = dist_(queryHash, epNode->hash);
+
+    topResults.emplace(dist, entryPoint);
+    candidates.emplace(dist, entryPoint);
+    visited.insert(entryPoint);
+
+    while (!candidates.empty()) {
+        auto current = candidates.top();
+        candidates.pop();
+
+        float lowerBound = topResults.top().first;  // closest of our best
+        if (current.first < lowerBound) {
+            // The furthest unexplored is already closer than our worst kept;
+            // exploring it can't push us further away from the query.
+            break;
+        }
+
+        auto currentNode = nodes_[current.second];
+        if (layer > currentNode->maxLayer) continue;
+
+        for (uint64_t neighborId : currentNode->neighbors[layer]) {
+            if (visited.find(neighborId) == visited.end()) {
+                visited.insert(neighborId);
+                auto neighborNode = nodes_[neighborId];
+                float neighborDist = dist_(queryHash, neighborNode->hash);
+
+                if (static_cast<int>(topResults.size()) < ef || neighborDist > topResults.top().first) {
+                    candidates.emplace(neighborDist, neighborId);
+                    topResults.emplace(neighborDist, neighborId);
+                    if (static_cast<int>(topResults.size()) > ef) {
+                        topResults.pop();  // drop the closest (worst in furthest-mode)
+                    }
+                }
+            }
+        }
+    }
+
+    return topResults;
+}
+
+template<typename T, typename DistanceFn>
+std::vector<uint64_t> HNSWIndex<T, DistanceFn>::searchFurthest(const T& queryHash, int k, int efSearch) {
+    std::vector<uint64_t> result;
+    if (!hasEntryPoint_) return result;
+
+    efSearch = std::max(efSearch, k);
+    uint64_t currentEp = entryPointId_;
+
+    // Phase 1: greedy ascent through layers — move to the FURTHEST neighbor at each step.
+    for (int lc = maxCurrentLayer_; lc > 0; --lc) {
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            float maxDist = dist_(queryHash, nodes_[currentEp]->hash);
+            uint64_t bestEp = currentEp;
+
+            for (uint64_t neighborId : nodes_[currentEp]->neighbors[lc]) {
+                float d = dist_(queryHash, nodes_[neighborId]->hash);
+                if (d > maxDist) {
+                    maxDist = d;
+                    bestEp = neighborId;
+                    changed = true;
+                }
+            }
+            currentEp = bestEp;
+        }
+    }
+
+    auto topResults = searchLayerFurthest(queryHash, currentEp, efSearch, 0);
+
+    while (static_cast<int>(topResults.size()) > k) {
+        topResults.pop();  // drop closest until k remain
+    }
+
+    // Pop from min-heap gives closest-first; reverse to put furthest first.
+    result.reserve(topResults.size());
+    while (!topResults.empty()) {
+        result.push_back(topResults.top().second);
+        topResults.pop();
+    }
+    std::reverse(result.begin(), result.end());
+    return result;
+}
+
 std::string escapeJSONString(const std::string& input) {
     std::string output;
     for (char c : input) {
