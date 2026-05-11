@@ -4,23 +4,27 @@
 #include <set>
 #include <sstream>
 
-HNSWIndex::HNSWIndex(int M, int M_max0, int efConstruction)
+template<typename T, typename DistanceFn>
+HNSWIndex<T, DistanceFn>::HNSWIndex(int M, int M_max0, int efConstruction, DistanceFn dist)
     : M_(M), M_max0_(M_max0), efConstruction_(efConstruction),
-      maxCurrentLayer_(-1), hasEntryPoint_(false), entryPointId_(0) {
+      dist_(std::move(dist)),
+      entryPointId_(0), maxCurrentLayer_(-1), hasEntryPoint_(false) {
     levelMult_ = 1.0 / std::log(static_cast<double>(M_));
     std::random_device rd;
     rng_.seed(rd());
 }
 
-int HNSWIndex::generateRandomLayer() {
+template<typename T, typename DistanceFn>
+int HNSWIndex<T, DistanceFn>::generateRandomLayer() {
     std::uniform_real_distribution<double> distribution(0.0, 1.0);
     double r = -std::log(distribution(rng_)) * levelMult_;
     return static_cast<int>(r);
 }
 
-void HNSWIndex::selectNeighbors(std::vector<uint64_t>& neighbors,
-                                std::priority_queue<std::pair<float, uint64_t>>& candidates,
-                                int M) {
+template<typename T, typename DistanceFn>
+void HNSWIndex<T, DistanceFn>::selectNeighbors(std::vector<uint64_t>& neighbors,
+                                               std::priority_queue<std::pair<float, uint64_t>>& candidates,
+                                               int M) {
     while (static_cast<int>(candidates.size()) > M) {
         candidates.pop(); // max-heap: top is the furthest element
     }
@@ -31,12 +35,12 @@ void HNSWIndex::selectNeighbors(std::vector<uint64_t>& neighbors,
     }
 }
 
-std::priority_queue<std::pair<float, uint64_t>> HNSWIndex::searchLayer(
-    const Embedding& queryHash,
-    uint64_t entryPoint,
-    int ef,
-    int layer)
-{
+template<typename T, typename DistanceFn>
+std::priority_queue<std::pair<float, uint64_t>>
+HNSWIndex<T, DistanceFn>::searchLayer(const T& queryHash,
+                                      uint64_t entryPoint,
+                                      int ef,
+                                      int layer) {
     std::priority_queue<std::pair<float, uint64_t>> topResults; // max-heap by distance
     std::priority_queue<std::pair<float, uint64_t>,
                         std::vector<std::pair<float, uint64_t>>,
@@ -44,7 +48,7 @@ std::priority_queue<std::pair<float, uint64_t>> HNSWIndex::searchLayer(
     std::set<uint64_t> visited;
 
     auto epNode = nodes_[entryPoint];
-    float dist = computeDistance(queryHash, epNode->hash);
+    float dist = dist_(queryHash, epNode->hash);
 
     topResults.emplace(dist, entryPoint);
     candidates.emplace(dist, entryPoint);
@@ -66,7 +70,7 @@ std::priority_queue<std::pair<float, uint64_t>> HNSWIndex::searchLayer(
             if (visited.find(neighborId) == visited.end()) {
                 visited.insert(neighborId);
                 auto neighborNode = nodes_[neighborId];
-                float neighborDist = computeDistance(queryHash, neighborNode->hash);
+                float neighborDist = dist_(queryHash, neighborNode->hash);
 
                 if (static_cast<int>(topResults.size()) < ef || neighborDist < topResults.top().first) {
                     candidates.emplace(neighborDist, neighborId);
@@ -82,15 +86,16 @@ std::priority_queue<std::pair<float, uint64_t>> HNSWIndex::searchLayer(
     return topResults;
 }
 
-void HNSWIndex::insert(uint64_t id, Embedding hash) {
+template<typename T, typename DistanceFn>
+void HNSWIndex<T, DistanceFn>::insert(uint64_t id, T hash) {
     if (nodes_.find(id) != nodes_.end()) {
         return;
     }
 
     int layer = generateRandomLayer();
-    auto newNode = std::make_shared<HNSWNode>(id, std::move(hash), layer);
+    auto newNode = std::make_shared<HNSWNode<T>>(id, std::move(hash), layer);
     nodes_[id] = newNode;
-    const Embedding& nodeHash = newNode->hash;
+    const T& nodeHash = newNode->hash;
 
     if (!hasEntryPoint_) {
         entryPointId_ = id;
@@ -107,13 +112,13 @@ void HNSWIndex::insert(uint64_t id, Embedding hash) {
         bool changed = true;
         while (changed) {
             changed = false;
-            float minDist = computeDistance(nodeHash, nodes_[currentEp]->hash);
+            float minDist = dist_(nodeHash, nodes_[currentEp]->hash);
             uint64_t bestEp = currentEp;
 
             for (uint64_t neighborId : nodes_[currentEp]->neighbors[lc]) {
-                float dist = computeDistance(nodeHash, nodes_[neighborId]->hash);
-                if (dist < minDist) {
-                    minDist = dist;
+                float d = dist_(nodeHash, nodes_[neighborId]->hash);
+                if (d < minDist) {
+                    minDist = d;
                     bestEp = neighborId;
                     changed = true;
                 }
@@ -138,7 +143,7 @@ void HNSWIndex::insert(uint64_t id, Embedding hash) {
             if (static_cast<int>(neighborNode->neighbors[lc].size()) > M_max) {
                 std::priority_queue<std::pair<float, uint64_t>> nCandidates;
                 for (uint64_t nId : neighborNode->neighbors[lc]) {
-                    float d = computeDistance(neighborNode->hash, nodes_[nId]->hash);
+                    float d = dist_(neighborNode->hash, nodes_[nId]->hash);
                     nCandidates.emplace(d, nId);
                 }
                 selectNeighbors(neighborNode->neighbors[lc], nCandidates, M_max);
@@ -148,7 +153,7 @@ void HNSWIndex::insert(uint64_t id, Embedding hash) {
         if (lc > 0) {
             float minDist = std::numeric_limits<float>::max();
             for (uint64_t nId : newNode->neighbors[lc]) {
-                float d = computeDistance(nodeHash, nodes_[nId]->hash);
+                float d = dist_(nodeHash, nodes_[nId]->hash);
                 if (d < minDist) {
                     minDist = d;
                     currentEp = nId;
@@ -163,7 +168,8 @@ void HNSWIndex::insert(uint64_t id, Embedding hash) {
     }
 }
 
-std::vector<uint64_t> HNSWIndex::search(const Embedding& queryHash, int k, int efSearch) {
+template<typename T, typename DistanceFn>
+std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k, int efSearch) {
     std::vector<uint64_t> result;
     if (!hasEntryPoint_) return result;
 
@@ -174,13 +180,13 @@ std::vector<uint64_t> HNSWIndex::search(const Embedding& queryHash, int k, int e
         bool changed = true;
         while (changed) {
             changed = false;
-            float minDist = computeDistance(queryHash, nodes_[currentEp]->hash);
+            float minDist = dist_(queryHash, nodes_[currentEp]->hash);
             uint64_t bestEp = currentEp;
 
             for (uint64_t neighborId : nodes_[currentEp]->neighbors[lc]) {
-                float dist = computeDistance(queryHash, nodes_[neighborId]->hash);
-                if (dist < minDist) {
-                    minDist = dist;
+                float d = dist_(queryHash, nodes_[neighborId]->hash);
+                if (d < minDist) {
+                    minDist = d;
                     bestEp = neighborId;
                     changed = true;
                 }
@@ -206,7 +212,7 @@ std::vector<uint64_t> HNSWIndex::search(const Embedding& queryHash, int k, int e
 }
 
 std::string escapeJSONString(const std::string& input) {
-    std::string output = "";
+    std::string output;
     for (char c : input) {
         if (c == '"') output += "\\\"";
         else if (c == '\\') output += "\\\\";
@@ -220,7 +226,9 @@ std::string escapeJSONString(const std::string& input) {
     return output;
 }
 
-std::string HNSWIndex::exportGraphJSON(const std::unordered_map<uint64_t, std::string>& idToPath) const {
+template<typename T, typename DistanceFn>
+std::string HNSWIndex<T, DistanceFn>::exportGraphJSON(
+        const std::unordered_map<uint64_t, std::string>& idToPath) const {
     std::stringstream ss;
     ss << "{\"nodes\":[";
     bool firstNode = true;
@@ -252,3 +260,7 @@ std::string HNSWIndex::exportGraphJSON(const std::unordered_map<uint64_t, std::s
     ss << "]}";
     return ss.str();
 }
+
+// Explicit template instantiations — exactly these two flavors are usable.
+template class HNSWIndex<uint64_t, HammingDistance>;
+template class HNSWIndex<std::vector<float>, CosineDistance>;

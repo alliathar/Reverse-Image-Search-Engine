@@ -1,18 +1,20 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include <vector>
 
 class ImageProcessor {
 public:
-    // Lazily loads the ONNX model on first call. Must be called from the same process
-    // that runs inference. Safe to call multiple times.
+    // --- CNN embedding (MobileNetV3-Small via ONNX Runtime) ---
+    // Lazily loads the ONNX model on first call.
     static void initialize(const std::string& modelPath);
-
-    // Loads the image, preprocesses (resize 224x224, RGB, ImageNet normalize),
-    // runs inference, and returns the L2-normalized embedding (576-d for MobileNetV3-Small).
+    // 576-d L2-normalized feature vector. Distance is cosine.
     static std::vector<float> generateEmbedding(const std::string& filepath);
-
     // Number of dimensions in the embedding. Valid after initialize().
     static size_t embeddingDim();
+
+    // --- 64-bit DCT pHash (legacy) ---
+    // Produces a 64-bit perceptual hash. Distance is Hamming popcount.
+    static uint64_t generatePHash(const std::string& filepath);
 };

@@ -9,6 +9,9 @@ const matchesGrid = document.getElementById('matches-grid');
 const loadBtn = document.getElementById('load-btn');
 const datasetPathInput = document.getElementById('datasetPath');
 const loadStatus = document.getElementById('load-status');
+const queryPreview = document.getElementById('query-preview');
+const queryPreviewImg = document.getElementById('query-preview-img');
+let lastQueryUrl = null;
 
 queryImageInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
@@ -24,7 +27,16 @@ searchForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
     const formData = new FormData(searchForm);
-    
+
+    // Preview the query image locally (revoke any previous URL to avoid leaks).
+    const file = queryImageInput.files[0];
+    if (file) {
+        if (lastQueryUrl) URL.revokeObjectURL(lastQueryUrl);
+        lastQueryUrl = URL.createObjectURL(file);
+        queryPreviewImg.src = lastQueryUrl;
+        queryPreview.classList.remove('hidden');
+    }
+
     // UI Loading state
     submitBtn.disabled = true;
     btnText.classList.add('hidden');

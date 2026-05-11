@@ -7,7 +7,7 @@ const fs = require('fs');
 const readline = require('readline');
 
 const app = express();
-const port = 3000;
+const port = 0;
 
 app.use(cors());
 app.use(express.static('public')); // Serve the frontend
@@ -91,6 +91,7 @@ app.get('/api/image', (req, res) => {
     });
 });
 
-app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+const server = app.listen(port, () => {
+    const actualPort = server.address().port;
+    console.log(`Server running at http://localhost:${actualPort}`);
 });

@@ -49,6 +49,22 @@ cmake --build . --config Release
 
 This produces the `ReverseImageSearch` executable inside [build/](./build/) (`.exe` on Windows). Build flags `-O3 -march=native` are set in [CMakeLists.txt](./CMakeLists.txt).
 
+### Backend selection
+
+The HNSW index is templated and supports two backends:
+
+- **CNN embeddings** (default) — MobileNetV3-Small features + cosine distance. Requires steps 1 and 2.
+- **pHash** (legacy) — 64-bit DCT pHash + Hamming distance. Pure C++, no ONNX dependency.
+
+To compile the pHash backend instead, pass `-DUSE_PHASH=ON` to CMake:
+
+```bash
+cmake -DUSE_PHASH=ON ..
+cmake --build .
+```
+
+The CMake status line will print the active backend, and you can skip steps 1 and 2 entirely if you only want pHash.
+
 The binary is a **long-running process** driven by stdin commands:
 
 - `LOAD <dataset_path>` — recursively scans the folder, embeds every image, and builds one HNSW index per subfolder (treated as a category). Prints `{"status":"ready","count":N,"graph":{...}}`.

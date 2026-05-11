@@ -112,6 +112,20 @@ header p { color: var(--text-secondary); font-size: 1.1rem; }
 .graph-section h2, .matches-section h2 { font-family: 'Outfit', sans-serif; margin-bottom: 1.5rem; }
 #network-canvas { flex-grow: 1; border-radius: 12px; background: rgba(0,0,0,0.3); overflow: hidden; }
 
+.query-preview {
+    padding: 1rem; margin-bottom: 1.5rem;
+    display: flex; align-items: center; gap: 1rem;
+}
+.query-preview-label {
+    font-size: 0.75rem; color: var(--primary); text-transform: uppercase;
+    letter-spacing: 0.05em; font-weight: 600;
+    padding: 4px 8px; background: rgba(139, 92, 246, 0.1); border-radius: 4px;
+}
+#query-preview-img {
+    width: 80px; height: 80px; object-fit: cover; border-radius: 12px;
+    border: 1px solid var(--border-color);
+}
+
 .matches-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1.5rem; }
 .match-card {
     background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color);
