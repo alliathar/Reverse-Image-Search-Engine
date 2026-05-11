@@ -1,18 +1,18 @@
 #pragma once
 
 #include <string>
-#include <cstdint>
 #include <vector>
 
 class ImageProcessor {
 public:
-    // Creates a 64-bit pHash from a given image filepath using full 2D DCT
-    static uint64_t generatePHash(const std::string& filepath);
+    // Lazily loads the ONNX model on first call. Must be called from the same process
+    // that runs inference. Safe to call multiple times.
+    static void initialize(const std::string& modelPath);
 
-private:
-    // Load via stb_image and resize to 32x32, returning grayscale float map
-    static std::vector<float> loadAndPreprocess(const std::string& filepath);
+    // Loads the image, preprocesses (resize 224x224, RGB, ImageNet normalize),
+    // runs inference, and returns the L2-normalized embedding (576-d for MobileNetV3-Small).
+    static std::vector<float> generateEmbedding(const std::string& filepath);
 
-    // 2D Discrete Cosine Transform on 32x32 image and extract top-left 8x8 to produce 64-bit hash
-    static uint64_t computeHashFromPixels(const std::vector<float>& pixels);
+    // Number of dimensions in the embedding. Valid after initialize().
+    static size_t embeddingDim();
 };

@@ -1,6 +1,8 @@
 #include "HNSW.h"
 #include <algorithm>
+#include <limits>
 #include <set>
+#include <sstream>
 
 HNSWIndex::HNSWIndex(int M, int M_max0, int efConstruction)
     : M_(M), M_max0_(M_max0), efConstruction_(efConstruction),
@@ -16,10 +18,11 @@ int HNSWIndex::generateRandomLayer() {
     return static_cast<int>(r);
 }
 
-void HNSWIndex::selectNeighbors(std::vector<uint64_t>& neighbors, std::priority_queue<std::pair<uint32_t, uint64_t>>& candidates, int M) {
-    // A simple heuristic: take the closest M candidates
-    while (candidates.size() > M) {
-        candidates.pop(); // priority queue top is the *furthest* element (max heap by distance)
+void HNSWIndex::selectNeighbors(std::vector<uint64_t>& neighbors,
+                                std::priority_queue<std::pair<float, uint64_t>>& candidates,
+                                int M) {
+    while (static_cast<int>(candidates.size()) > M) {
+        candidates.pop(); // max-heap: top is the furthest element
     }
     neighbors.clear();
     while (!candidates.empty()) {
@@ -28,33 +31,32 @@ void HNSWIndex::selectNeighbors(std::vector<uint64_t>& neighbors, std::priority_
     }
 }
 
-std::priority_queue<std::pair<uint32_t, uint64_t>> HNSWIndex::searchLayer(
-    uint64_t queryHash,
+std::priority_queue<std::pair<float, uint64_t>> HNSWIndex::searchLayer(
+    const Embedding& queryHash,
     uint64_t entryPoint,
     int ef,
-    int layer) 
+    int layer)
 {
-    // max heap, top is the furthest found candidate among the nearest
-    std::priority_queue<std::pair<uint32_t, uint64_t>> topResults;
-    // min heap, top is the closest candidate to explore
-    std::priority_queue<std::pair<uint32_t, uint64_t>, std::vector<std::pair<uint32_t, uint64_t>>, std::greater<>> candidates;
-    
+    std::priority_queue<std::pair<float, uint64_t>> topResults; // max-heap by distance
+    std::priority_queue<std::pair<float, uint64_t>,
+                        std::vector<std::pair<float, uint64_t>>,
+                        std::greater<>> candidates; // min-heap
     std::set<uint64_t> visited;
 
     auto epNode = nodes_[entryPoint];
-    uint32_t dist = computeHammingDistance(queryHash, epNode->hash);
+    float dist = computeDistance(queryHash, epNode->hash);
 
     topResults.emplace(dist, entryPoint);
     candidates.emplace(dist, entryPoint);
     visited.insert(entryPoint);
 
     while (!candidates.empty()) {
-        auto current = candidates.top(); // Get the nearest unexplored node
+        auto current = candidates.top();
         candidates.pop();
 
-        uint32_t lowerBound = topResults.top().first;
+        float lowerBound = topResults.top().first;
         if (current.first > lowerBound) {
-            break; // furthest candidate is closer than closest unexplored
+            break;
         }
 
         auto currentNode = nodes_[current.second];
@@ -64,14 +66,12 @@ std::priority_queue<std::pair<uint32_t, uint64_t>> HNSWIndex::searchLayer(
             if (visited.find(neighborId) == visited.end()) {
                 visited.insert(neighborId);
                 auto neighborNode = nodes_[neighborId];
-                uint32_t neighborDist = computeHammingDistance(queryHash, neighborNode->hash);
+                float neighborDist = computeDistance(queryHash, neighborNode->hash);
 
-                // Add this node to max heap, if there is space OR if it is closer than the furthest node in the heap
-                if (topResults.size() < ef || neighborDist < topResults.top().first) {
+                if (static_cast<int>(topResults.size()) < ef || neighborDist < topResults.top().first) {
                     candidates.emplace(neighborDist, neighborId);
                     topResults.emplace(neighborDist, neighborId);
-
-                    if (topResults.size() > ef) {
+                    if (static_cast<int>(topResults.size()) > ef) {
                         topResults.pop();
                     }
                 }
@@ -82,14 +82,15 @@ std::priority_queue<std::pair<uint32_t, uint64_t>> HNSWIndex::searchLayer(
     return topResults;
 }
 
-void HNSWIndex::insert(uint64_t id, uint64_t hash) {
+void HNSWIndex::insert(uint64_t id, Embedding hash) {
     if (nodes_.find(id) != nodes_.end()) {
-        return; // id already exists
+        return;
     }
 
     int layer = generateRandomLayer();
-    auto newNode = std::make_shared<HNSWNode>(id, hash, layer);
+    auto newNode = std::make_shared<HNSWNode>(id, std::move(hash), layer);
     nodes_[id] = newNode;
+    const Embedding& nodeHash = newNode->hash;
 
     if (!hasEntryPoint_) {
         entryPointId_ = id;
@@ -99,19 +100,18 @@ void HNSWIndex::insert(uint64_t id, uint64_t hash) {
     }
 
     uint64_t currentEp = entryPointId_;
-    uint64_t currentEpHash = nodes_[currentEp]->hash;
     int currentMaxLayer = maxCurrentLayer_;
 
-    // Phase 1: search for best entry point from top layer down to max(layer + 1, 0)
+    // Phase 1: greedy search from top layer down to layer + 1
     for (int lc = currentMaxLayer; lc > layer; --lc) {
         bool changed = true;
         while (changed) {
             changed = false;
-            uint32_t minDist = computeHammingDistance(hash, nodes_[currentEp]->hash);
+            float minDist = computeDistance(nodeHash, nodes_[currentEp]->hash);
             uint64_t bestEp = currentEp;
 
             for (uint64_t neighborId : nodes_[currentEp]->neighbors[lc]) {
-                uint32_t dist = computeHammingDistance(hash, nodes_[neighborId]->hash);
+                float dist = computeDistance(nodeHash, nodes_[neighborId]->hash);
                 if (dist < minDist) {
                     minDist = dist;
                     bestEp = neighborId;
@@ -125,35 +125,30 @@ void HNSWIndex::insert(uint64_t id, uint64_t hash) {
     // Phase 2: insert into all layers <= min(maxCurrentLayer, layer)
     int minLayer = std::min(layer, currentMaxLayer);
 
-    // candidates holds elements to connect to
     for (int lc = minLayer; lc >= 0; --lc) {
-        auto topResults = searchLayer(hash, currentEp, efConstruction_, lc);
-        
-        // Select neighbors for the new node
+        auto topResults = searchLayer(nodeHash, currentEp, efConstruction_, lc);
+
         int M_max = (lc == 0) ? M_max0_ : M_;
         selectNeighbors(newNode->neighbors[lc], topResults, M_);
 
-        // Add mutual connections
         for (uint64_t neighborId : newNode->neighbors[lc]) {
             auto neighborNode = nodes_[neighborId];
             neighborNode->neighbors[lc].push_back(id);
-            
-            // Shrink if capacity exceeded
-            if (neighborNode->neighbors[lc].size() > M_max) {
-                // Heuristic: just re-evaluate neighbors with priority queue
-                std::priority_queue<std::pair<uint32_t, uint64_t>> nCandidates;
+
+            if (static_cast<int>(neighborNode->neighbors[lc].size()) > M_max) {
+                std::priority_queue<std::pair<float, uint64_t>> nCandidates;
                 for (uint64_t nId : neighborNode->neighbors[lc]) {
-                    uint32_t d = computeHammingDistance(neighborNode->hash, nodes_[nId]->hash);
+                    float d = computeDistance(neighborNode->hash, nodes_[nId]->hash);
                     nCandidates.emplace(d, nId);
                 }
                 selectNeighbors(neighborNode->neighbors[lc], nCandidates, M_max);
             }
         }
-        
-        if (lc > 0) { // Search for next layer entry point
-            uint32_t minDist = static_cast<uint32_t>(-1);
+
+        if (lc > 0) {
+            float minDist = std::numeric_limits<float>::max();
             for (uint64_t nId : newNode->neighbors[lc]) {
-                uint32_t d = computeHammingDistance(hash, nodes_[nId]->hash);
+                float d = computeDistance(nodeHash, nodes_[nId]->hash);
                 if (d < minDist) {
                     minDist = d;
                     currentEp = nId;
@@ -168,23 +163,22 @@ void HNSWIndex::insert(uint64_t id, uint64_t hash) {
     }
 }
 
-std::vector<uint64_t> HNSWIndex::search(uint64_t queryHash, int k, int efSearch) {
+std::vector<uint64_t> HNSWIndex::search(const Embedding& queryHash, int k, int efSearch) {
     std::vector<uint64_t> result;
     if (!hasEntryPoint_) return result;
 
     efSearch = std::max(efSearch, k);
     uint64_t currentEp = entryPointId_;
 
-    // Phase 1: fast search to layer 1
     for (int lc = maxCurrentLayer_; lc > 0; --lc) {
         bool changed = true;
         while (changed) {
             changed = false;
-            uint32_t minDist = computeHammingDistance(queryHash, nodes_[currentEp]->hash);
+            float minDist = computeDistance(queryHash, nodes_[currentEp]->hash);
             uint64_t bestEp = currentEp;
 
             for (uint64_t neighborId : nodes_[currentEp]->neighbors[lc]) {
-                uint32_t dist = computeHammingDistance(queryHash, nodes_[neighborId]->hash);
+                float dist = computeDistance(queryHash, nodes_[neighborId]->hash);
                 if (dist < minDist) {
                     minDist = dist;
                     bestEp = neighborId;
@@ -195,10 +189,9 @@ std::vector<uint64_t> HNSWIndex::search(uint64_t queryHash, int k, int efSearch)
         }
     }
 
-    // Phase 2: detailed search at level 0
     auto topResults = searchLayer(queryHash, currentEp, efSearch, 0);
 
-    while (topResults.size() > k) {
+    while (static_cast<int>(topResults.size()) > k) {
         topResults.pop();
     }
 
@@ -209,11 +202,8 @@ std::vector<uint64_t> HNSWIndex::search(uint64_t queryHash, int k, int efSearch)
     }
 
     std::reverse(result.begin(), result.end());
-
     return result;
 }
-
-#include <sstream>
 
 std::string escapeJSONString(const std::string& input) {
     std::string output = "";
@@ -232,33 +222,33 @@ std::string escapeJSONString(const std::string& input) {
 
 std::string HNSWIndex::exportGraphJSON(const std::unordered_map<uint64_t, std::string>& idToPath) const {
     std::stringstream ss;
-    ss << "{\n  \"nodes\": [\n";
+    ss << "{\"nodes\":[";
     bool firstNode = true;
     for (const auto& pair : nodes_) {
-        if (!firstNode) ss << ",\n";
+        if (!firstNode) ss << ",";
         firstNode = false;
-        
+
         uint64_t id = pair.first;
         auto node = pair.second;
-        
+
         std::string path = idToPath.count(id) ? idToPath.at(id) : "unknown";
-        ss << "    {\"id\": " << id << ", \"path\": \"" << escapeJSONString(path) << "\", \"layer\": " << node->maxLayer << "}";
+        ss << "{\"id\":" << id << ",\"path\":\"" << escapeJSONString(path) << "\",\"layer\":" << node->maxLayer << "}";
     }
-    ss << "\n  ],\n  \"edges\": [\n";
-    
+    ss << "],\"edges\":[";
+
     bool firstEdge = true;
     for (const auto& pair : nodes_) {
         uint64_t sourceId = pair.first;
         auto node = pair.second;
-        
+
         for (int layer = 0; layer <= node->maxLayer; ++layer) {
             for (uint64_t targetId : node->neighbors[layer]) {
-                if (!firstEdge) ss << ",\n";
+                if (!firstEdge) ss << ",";
                 firstEdge = false;
-                ss << "    {\"source\": " << sourceId << ", \"target\": " << targetId << ", \"layer\": " << layer << "}";
+                ss << "{\"source\":" << sourceId << ",\"target\":" << targetId << ",\"layer\":" << layer << "}";
             }
         }
     }
-    ss << "\n  ]\n}";
+    ss << "]}";
     return ss.str();
 }

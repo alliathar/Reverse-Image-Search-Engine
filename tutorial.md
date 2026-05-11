@@ -1,16 +1,44 @@
 # How to Start the Project
 
-This is a reverse image search engine: a C++ backend (HNSW graph + pHash) wrapped by a Node.js web UI.
+This is a reverse image search engine: a C++ backend (CNN feature extractor + HNSW graph) wrapped by a Node.js web UI. Images are embedded into 576-d vectors by **MobileNetV3-Small** running on **ONNX Runtime**, and the **HNSW** index searches by cosine similarity.
 
 ## Prerequisites
 
 - C++17 compiler (GCC / Clang / MSVC)
 - CMake ≥ 3.10
 - Node.js ≥ 18 (includes `npm`)
+- Python 3.10+ with `pip` (only needed once, to export the model)
+- `curl` and `tar` (for downloading ONNX Runtime)
 
-## 1. Build the C++ engine
+## 1. Download ONNX Runtime
 
-From the project root ([Reverse-Image-Search-Engine/](./)):
+The C++ engine links against the prebuilt ONNX Runtime shared library. From the project root ([Reverse-Image-Search-Engine/](./)):
+
+```bash
+mkdir -p third_party
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/onnxruntime-linux-x64-1.20.0.tgz \
+  | tar -xz -C third_party/
+mv third_party/onnxruntime-linux-x64-1.20.0 third_party/onnxruntime
+```
+
+You should now have headers at [third_party/onnxruntime/include/](./third_party/onnxruntime/include/) and the shared library at [third_party/onnxruntime/lib/libonnxruntime.so](./third_party/onnxruntime/lib/). The CMake config in [CMakeLists.txt](./CMakeLists.txt) bakes this path into the binary's RPATH, so no `LD_LIBRARY_PATH` is needed at runtime.
+
+For macOS or Windows, grab the corresponding tarball from the [ONNX Runtime releases page](https://github.com/microsoft/onnxruntime/releases/tag/v1.20.0) instead.
+
+## 2. Export the CNN model
+
+A one-time Python script downloads MobileNetV3-Small from torchvision and writes it as a self-contained ONNX file.
+
+```bash
+python3 -m venv .export_venv
+.export_venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.export_venv/bin/pip install onnx onnxscript
+.export_venv/bin/python scripts/export_model.py
+```
+
+This produces [models/mobilenetv3_small.onnx](./models/) (≈3.7 MB). The export script is in [scripts/export_model.py](./scripts/export_model.py) — the model strips the classifier and exposes pooled 576-d features.
+
+## 3. Build the C++ engine
 
 ```bash
 mkdir -p build
@@ -19,19 +47,16 @@ cmake ..
 cmake --build . --config Release
 ```
 
-This produces the `ReverseImageSearch` executable (`.exe` on Windows) inside [build/](./build/). Build flags `-O3 -march=native` are set in [CMakeLists.txt](./CMakeLists.txt).
+This produces the `ReverseImageSearch` executable inside [build/](./build/) (`.exe` on Windows). Build flags `-O3 -march=native` are set in [CMakeLists.txt](./CMakeLists.txt).
 
-Quick sanity check — run the binary directly:
+The binary is a **long-running process** driven by stdin commands:
 
-```bash
-./ReverseImageSearch search <query_image> <dataset_directory>
-```
+- `LOAD <dataset_path>` — recursively scans the folder, embeds every image, and builds one HNSW index per subfolder (treated as a category). Prints `{"status":"ready","count":N,"graph":{...}}`.
+- `SEARCH <query_image> [category]` — embeds the query image and returns the top 12 nearest neighbors. Prints `{"results":[...]}`.
 
-It prints JSON with the top matches and the HNSW graph (see [main.cpp:15-99](./main.cpp#L15-L99)).
+You normally don't call it directly — the Node server spawns it once and pipes commands to it (see [web/server.js](./web/server.js)).
 
-## 2. Install web dependencies
-
-In a new terminal, from the project root:
+## 4. Install web dependencies
 
 ```bash
 cd web
@@ -40,7 +65,7 @@ npm install
 
 Dependencies: `express`, `multer`, `cors` (see [web/package.json](./web/package.json)).
 
-## 3. Run the server
+## 5. Run the server
 
 Still inside [web/](./web):
 
@@ -48,22 +73,27 @@ Still inside [web/](./web):
 npm start
 ```
 
-The server listens on **http://localhost:3000** ([web/server.js:9](./web/server.js#L9)).
+The server listens on **http://localhost:3000** ([web/server.js:9](./web/server.js#L9)) and spawns the C++ engine once at startup.
 
-Open the URL in a browser, point the UI at a dataset folder (absolute path), upload a query image, and the matched results and HNSW graph will render.
+Open the URL, paste your dataset folder path, click **Load Dataset** (this triggers the CNN embedding pass — expect ~10–30 ms per image), then upload a query image and search.
 
 ## Project layout
 
-- [main.cpp](./main.cpp) — CLI entry point, wires up indexing + search
-- [HNSW.cpp](./HNSW.cpp) / [HNSW.h](./HNSW.h) — HNSW graph index
-- [ImageProcessor.cpp](./ImageProcessor.cpp) / [ImageProcessor.h](./ImageProcessor.h) — pHash generation
-- [CMakeLists.txt](./CMakeLists.txt) — build config
-- [third_party/](./third_party/) — `stb_image`, `nlohmann/json`
+- [main.cpp](./main.cpp) — stdin REPL loop, owns the per-category HNSW indexes
+- [HNSW.cpp](./HNSW.cpp) / [HNSW.h](./HNSW.h) — HNSW graph index over `std::vector<float>` embeddings, cosine distance
+- [ImageProcessor.cpp](./ImageProcessor.cpp) / [ImageProcessor.h](./ImageProcessor.h) — ONNX Runtime session, image preprocessing (224×224, ImageNet normalize), inference, L2 normalization
+- [CMakeLists.txt](./CMakeLists.txt) — build config, links ONNX Runtime
+- [scripts/export_model.py](./scripts/export_model.py) — one-time PyTorch → ONNX export
+- [models/](./models/) — exported `.onnx` file (gitignored, regenerated by the script)
+- [third_party/](./third_party/) — `stb_image` (decode/resize) + ONNX Runtime (gitignored)
 - [web/](./web/) — Node/Express server and frontend in [web/public/](./web/public/)
 
 ## Troubleshooting
 
 - **`cmake` not found** — install CMake and re-open the terminal.
-- **Server can't find the executable** — confirm the binary is at [build/ReverseImageSearch](./build/ReverseImageSearch) (or wherever [web/server.js](./web/server.js) expects it) and rebuild if needed.
+- **`Failed to initialize ONNX model at ...`** — make sure step 2 succeeded and the file [models/mobilenetv3_small.onnx](./models/) exists. The binary looks for the model at `<exe_dir>/../models/mobilenetv3_small.onnx`.
+- **`error while loading shared libraries: libonnxruntime.so.1`** — step 1 was skipped or the path is wrong. Re-run CMake from a clean `build/` so the RPATH is re-baked.
+- **Server can't find the executable** — confirm the binary is at [build/ReverseImageSearch](./build/) and rebuild if needed.
 - **Port 3000 in use** — edit the `port` constant in [web/server.js:9](./web/server.js#L9).
-- **`{"error": "Dataset path is invalid"}`** — pass an absolute path that exists and contains readable images.
+- **Large dataset feels slow to load** — CNN inference is ~10–30 ms per image on CPU. A 1000-image dataset takes 10–30 seconds. Searches are fast afterwards (the index is reused).
+- **Sketch matching still weak** — try increasing `efSearch` in [main.cpp](./main.cpp) (currently 50), or swap MobileNetV3-Small for CLIP ViT-B/32 by editing [scripts/export_model.py](./scripts/export_model.py) and re-running it. CLIP is dramatically better for cross-modal (sketch↔photo) matching.
