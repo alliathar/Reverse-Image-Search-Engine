@@ -69,10 +69,15 @@ app.post('/api/search', upload.array('queryImage', 8), async (req, res) => {
 
     const queryImagePaths = req.files.map(f => f.path);
     const mode = req.body.mode || 'normal';     // normal | negative | multi
-    const category = req.body.category || 'all';
 
-    // Protocol: SEARCH <mode> <category> <path1> [<path2>...]
-    const cmd = `SEARCH ${mode} ${category} ${queryImagePaths.join(' ')}`;
+    // Categories may arrive as a comma-separated string from the multi-state dropdown.
+    // Empty / missing → "_" sentinel (meaning "all" for include, "none" for exclude).
+    const sanitize = v => (v && v.trim()) ? v.trim() : '_';
+    const include = sanitize(req.body.include);
+    const exclude = sanitize(req.body.exclude);
+
+    // Protocol: SEARCH <mode> <include_csv> <exclude_csv> <path1> [<path2>...]
+    const cmd = `SEARCH ${mode} ${include} ${exclude} ${queryImagePaths.join(' ')}`;
     const cleanup = () => queryImagePaths.forEach(p => fs.unlink(p, () => {}));
 
     try {

@@ -13,7 +13,13 @@ const queryPreview = document.getElementById('query-preview');
 const queryThumbs = document.getElementById('query-thumbs');
 const searchModeSelect = document.getElementById('search-mode');
 const categoryGroup = document.getElementById('category-group');
-const categorySelect = document.getElementById('category');
+const categoryTrigger = document.getElementById('category-trigger');
+const categorySummary = document.getElementById('category-summary');
+const categoryPopup = document.getElementById('category-popup');
+const categoryOptions = document.getElementById('category-options');
+// Map of category name → 'neutral' | 'include' | 'exclude'.
+const categoryStates = new Map();
+let availableCategories = [];
 const uploadLabelText = document.getElementById('upload-label-text');
 const graphSection = document.getElementById('graph-section');
 const graphToggle = document.getElementById('graph-toggle');
@@ -153,10 +159,66 @@ function applyMode() {
     queryImageInput.multiple = multi;
     uploadLabelText.textContent = multi ? 'Select Query Images' : 'Select Query Image';
     categoryGroup.classList.toggle('hidden', !needsCategory);
-    categorySelect.required = needsCategory;
 }
 searchModeSelect.addEventListener('change', applyMode);
 applyMode();
+
+// ----- Multi-state category dropdown -----
+function cycleState(name) {
+    const cur = categoryStates.get(name) || 'neutral';
+    const next = cur === 'neutral' ? 'include' : cur === 'include' ? 'exclude' : 'neutral';
+    categoryStates.set(name, next);
+    renderCategoryOptions();
+    updateCategorySummary();
+}
+
+function renderCategoryOptions() {
+    categoryOptions.innerHTML = '';
+    for (const name of availableCategories) {
+        const state = categoryStates.get(name) || 'neutral';
+        const li = document.createElement('li');
+        li.className = `category-option state-${state}`;
+        li.innerHTML = `
+            <span class="category-state-icon"></span>
+            <span class="category-name">${name}</span>
+        `;
+        li.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleState(name);
+        });
+        categoryOptions.appendChild(li);
+    }
+}
+
+function updateCategorySummary() {
+    if (availableCategories.length === 0) {
+        categorySummary.textContent = 'Load a dataset first…';
+        return;
+    }
+    const includes = [...categoryStates.entries()].filter(([, s]) => s === 'include').map(([n]) => n);
+    const excludes = [...categoryStates.entries()].filter(([, s]) => s === 'exclude').map(([n]) => n);
+    if (includes.length === 0 && excludes.length === 0) {
+        categorySummary.textContent = 'All categories';
+    } else {
+        const parts = [];
+        if (includes.length) parts.push(`+${includes.length}`);
+        if (excludes.length) parts.push(`−${excludes.length}`);
+        categorySummary.textContent = parts.join(' · ');
+    }
+}
+
+categoryTrigger.addEventListener('click', () => {
+    if (categoryTrigger.disabled) return;
+    categoryPopup.classList.toggle('hidden');
+});
+document.addEventListener('click', (e) => {
+    if (!categoryPopup.classList.contains('hidden')
+        && !categoryPopup.contains(e.target)
+        && e.target !== categoryTrigger
+        && !categoryTrigger.contains(e.target)) {
+        categoryPopup.classList.add('hidden');
+    }
+});
 
 let networkInstance = null;
 
@@ -167,16 +229,26 @@ searchForm.addEventListener('submit', async (e) => {
     const files = Array.from(queryImageInput.files);
 
     if (files.length === 0) return;
-    if (mode === 'category' && !categorySelect.value) {
-        alert('Pick a category for category-wise search.');
+
+    // Collect include/exclude from the multi-state dropdown.
+    const includes = [];
+    const excludes = [];
+    for (const [name, state] of categoryStates.entries()) {
+        if (state === 'include') includes.push(name);
+        else if (state === 'exclude') excludes.push(name);
+    }
+
+    if (mode === 'category' && includes.length === 0 && excludes.length === 0) {
+        alert('Pick at least one category to include or exclude for category-wise search.');
         return;
     }
 
     // Build the request payload. The backend expects `mode` to be normal/negative/multi;
-    // "category" is a UI label for normal search with a category filter.
+    // "category" UI mode is just normal search with a category filter active.
     const formData = new FormData();
     formData.append('mode', mode === 'category' ? 'normal' : mode);
-    formData.append('category', (mode === 'category') ? categorySelect.value : 'all');
+    formData.append('include', mode === 'category' ? includes.join(',') : '');
+    formData.append('exclude', mode === 'category' ? excludes.join(',') : '');
     const filesToSend = (mode === 'multi') ? files : [files[0]];
     filesToSend.forEach(f => formData.append('queryImage', f));
 
@@ -239,11 +311,13 @@ loadBtn.addEventListener('click', async () => {
         loadStatus.textContent = `Ready — ${data.count} images loaded`;
         submitBtn.disabled = false;
 
-        // Populate the category dropdown.
-        const cats = Array.isArray(data.categories) ? data.categories : [];
-        categorySelect.innerHTML = '<option value="">Pick a category…</option>'
-            + cats.map(c => `<option value="${c}">${c}</option>`).join('');
-        categorySelect.disabled = cats.length === 0;
+        // Populate the multi-state category dropdown.
+        availableCategories = Array.isArray(data.categories) ? [...data.categories] : [];
+        categoryStates.clear();
+        for (const c of availableCategories) categoryStates.set(c, 'neutral');
+        categoryTrigger.disabled = availableCategories.length === 0;
+        renderCategoryOptions();
+        updateCategorySummary();
 
         // Cache the graph; user opens it explicitly with the toggle.
         cachedGraph = data.graph || null;

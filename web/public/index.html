@@ -43,10 +43,17 @@
                     </select>
                 </div>
                 <div class="input-group hidden" id="category-group">
-                    <label for="category">Category</label>
-                    <select id="category" name="category" disabled>
-                        <option value="">Load a dataset first…</option>
-                    </select>
+                    <label>Categories</label>
+                    <div class="multi-category" id="category-widget">
+                        <button type="button" class="multi-category-trigger" id="category-trigger" disabled>
+                            <span id="category-summary">Load a dataset first…</span>
+                            <span class="multi-category-caret">▾</span>
+                        </button>
+                        <div class="multi-category-popup hidden" id="category-popup">
+                            <p class="multi-category-hint">Click to cycle: neutral → include → exclude</p>
+                            <ul id="category-options"></ul>
+                        </div>
+                    </div>
                 </div>
                 <div class="upload-wrapper">
                     <label for="queryImage" class="file-label">

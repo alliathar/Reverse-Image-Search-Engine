@@ -155,16 +155,35 @@ int main(int /*argc*/, char* argv[]) {
             std::cout << out.str() << "\n" << std::flush;
 
         } else if (words[0] == "SEARCH") {
-            // Protocol: SEARCH <mode> <category> <path1> [<path2>...]
-            //   mode:     "normal" | "negative" | "multi"
-            //   category: "all" or specific category name
-            if (words.size() < 4) {
-                std::cout << "{\"error\":\"Usage: SEARCH <mode> <category> <path>...\"}\n" << std::flush;
+            // Protocol: SEARCH <mode> <include_csv> <exclude_csv> <path1> [<path2>...]
+            //   mode:        "normal" | "negative" | "multi"
+            //   include_csv: comma-separated category names to keep, or "_" for all
+            //   exclude_csv: comma-separated category names to drop, or "_" for none
+            //   Category names can't contain commas or spaces (folder names from the dataset).
+            if (words.size() < 5) {
+                std::cout << "{\"error\":\"Usage: SEARCH <mode> <include> <exclude> <path>...\"}\n" << std::flush;
                 continue;
             }
             std::string mode = words[1];
-            std::string targetCategory = words[2];
-            std::vector<std::string> queryPaths(words.begin() + 3, words.end());
+            std::string includeArg = words[2];
+            std::string excludeArg = words[3];
+            std::vector<std::string> queryPaths(words.begin() + 4, words.end());
+
+            auto splitCSV = [](const std::string& s) {
+                std::vector<std::string> out;
+                if (s == "_" || s.empty()) return out;
+                size_t start = 0;
+                for (size_t i = 0; i <= s.size(); ++i) {
+                    if (i == s.size() || s[i] == ',') {
+                        if (i > start) out.emplace_back(s.substr(start, i - start));
+                        start = i + 1;
+                    }
+                }
+                return out;
+            };
+            std::vector<std::string> includeList = splitCSV(includeArg);
+            std::vector<std::string> excludeList = splitCSV(excludeArg);
+            std::unordered_set<std::string> excludeSet(excludeList.begin(), excludeList.end());
 
             // Compute / combine query hashes.
             HashT queryHash;
@@ -219,16 +238,24 @@ int main(int /*argc*/, char* argv[]) {
             DistanceFn dfn;
 
             // Resolve which indexes to scan.
+            // Base set: explicit include list if non-empty, otherwise all categories.
+            // Then filter out any category in the exclude set.
             std::vector<std::shared_ptr<IndexT>> targetIndexes;
-            if (targetCategory == "all" || targetCategory == "") {
-                for (auto& p : categoryIndexes) targetIndexes.push_back(p.second);
-            } else {
-                auto it = categoryIndexes.find(targetCategory);
-                if (it == categoryIndexes.end()) {
-                    std::cout << "{\"error\":\"Category not found in dataset\"}\n" << std::flush;
-                    continue;
+            if (includeList.empty()) {
+                for (auto& p : categoryIndexes) {
+                    if (excludeSet.count(p.first)) continue;
+                    targetIndexes.push_back(p.second);
                 }
-                targetIndexes.push_back(it->second);
+            } else {
+                for (const auto& name : includeList) {
+                    if (excludeSet.count(name)) continue;
+                    auto it = categoryIndexes.find(name);
+                    if (it != categoryIndexes.end()) targetIndexes.push_back(it->second);
+                }
+            }
+            if (targetIndexes.empty()) {
+                std::cout << "{\"error\":\"No categories left after include/exclude filtering\"}\n" << std::flush;
+                continue;
             }
 
             if (mode == "negative") {
