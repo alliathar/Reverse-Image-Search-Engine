@@ -5,6 +5,7 @@
 #include <random>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <cmath>
 #include <string>
@@ -54,6 +55,10 @@ public:
     HNSWIndex(int M = 16, int M_max0 = 32, int efConstruction = 100, DistanceFn dist = DistanceFn{});
 
     void insert(uint64_t id, T hash);
+    void   softDelete(uint64_t id);
+    bool   isDeleted(uint64_t id)  const { return deleted_.count(id) > 0; }
+    size_t deletedCount()          const { return deleted_.size(); }
+
     std::vector<uint64_t> search(const T& queryHash, int k, int efSearch = 50);
     // Reverse-greedy traversal: walks to the FURTHEST neighbor at each step.
     // Returns a local maximum of distance — not guaranteed to be the global
@@ -61,6 +66,9 @@ public:
     std::vector<uint64_t> searchFurthest(const T& queryHash, int k, int efSearch = 50);
     std::string exportGraphJSON(const std::unordered_map<uint64_t, std::string>& idToPath) const;
     size_t size() const { return nodes_.size(); }
+    int getM()              const { return M_; }
+    int getM_max0()         const { return M_max0_; }
+    int getEfConstruction() const { return efConstruction_; }
     const T& getEmbedding(uint64_t id) const { return nodes_.at(id)->hash; }
     std::vector<uint64_t> getAllIds() const {
         std::vector<uint64_t> ids;
@@ -81,6 +89,7 @@ private:
     bool hasEntryPoint_;
 
     std::unordered_map<uint64_t, std::shared_ptr<HNSWNode<T>>> nodes_;
+    std::unordered_set<uint64_t> deleted_;
     std::mt19937 rng_;
 
     int generateRandomLayer();

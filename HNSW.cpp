@@ -49,16 +49,31 @@ HNSWIndex<T, DistanceFn>::searchLayer(const T& queryHash,
 
     auto epNode = nodes_[entryPoint];
     float dist = dist_(queryHash, epNode->hash);
+    bool  epDel = deleted_.count(entryPoint) > 0;
 
-    topResults.emplace(dist, entryPoint);
+    // Always add the entry point to candidates — we need to traverse through
+    // it regardless of its deletion status to reach live nodes nearby.
     candidates.emplace(dist, entryPoint);
     visited.insert(entryPoint);
+
+    // Only surface the entry point as a result if it is not deleted.
+    if (!epDel) {
+        topResults.emplace(dist, entryPoint);
+    }
 
     while (!candidates.empty()) {
         auto current = candidates.top();
         candidates.pop();
 
-        float lowerBound = topResults.top().first;
+        // If the nearest unvisited candidate is already further than the
+        // furthest element in our result set, we cannot improve — stop.
+        // Guard against an empty topResults (possible when every node seen so
+        // far is deleted): treat lowerBound as +inf in that case so we keep
+        // searching.
+        float lowerBound = topResults.empty()
+                         ? std::numeric_limits<float>::max()
+                         : topResults.top().first;
+
         if (current.first > lowerBound) {
             break;
         }
@@ -69,14 +84,27 @@ HNSWIndex<T, DistanceFn>::searchLayer(const T& queryHash,
         for (uint64_t neighborId : currentNode->neighbors[layer]) {
             if (visited.find(neighborId) == visited.end()) {
                 visited.insert(neighborId);
-                auto neighborNode = nodes_[neighborId];
+                auto neighborNode  = nodes_[neighborId];
                 float neighborDist = dist_(queryHash, neighborNode->hash);
+                bool  neighborDel  = deleted_.count(neighborId) > 0;
 
-                if (static_cast<int>(topResults.size()) < ef || neighborDist < topResults.top().first) {
+                float worstResult = topResults.empty()
+                                  ? std::numeric_limits<float>::max()
+                                  : topResults.top().first;
+
+                if (static_cast<int>(topResults.size()) < ef
+                        || neighborDist < worstResult) {
+
+                    // Traverse through this node regardless of deletion status
+                    // so we can reach live nodes on the other side of it.
                     candidates.emplace(neighborDist, neighborId);
-                    topResults.emplace(neighborDist, neighborId);
-                    if (static_cast<int>(topResults.size()) > ef) {
-                        topResults.pop();
+
+                    // Only add to results if the node is alive.
+                    if (!neighborDel) {
+                        topResults.emplace(neighborDist, neighborId);
+                        if (static_cast<int>(topResults.size()) > ef) {
+                            topResults.pop();
+                        }
                     }
                 }
             }
@@ -168,6 +196,53 @@ void HNSWIndex<T, DistanceFn>::insert(uint64_t id, T hash) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// softDelete
+//
+// Adds the id to the deleted_ tombstone set.  The node stays in nodes_ so
+// the graph topology is preserved — removing it would leave dangling neighbor
+// references and break traversal.
+//
+// Entry-point edge case: if we delete the current entry point we walk its
+// neighbor lists (from the highest layer downward) to find the first live
+// replacement.  If no live node exists at all (every node was deleted), we
+// set hasEntryPoint_ = false so subsequent searches return empty immediately.
+// ---------------------------------------------------------------------------
+template<typename T, typename DistanceFn>
+void HNSWIndex<T, DistanceFn>::softDelete(uint64_t id) {
+    // Unknown id — nothing to do.
+    if (nodes_.find(id) == nodes_.end()) return;
+
+    // Already deleted — idempotent, don't double-count.
+    if (deleted_.count(id)) return;
+
+    deleted_.insert(id);
+
+    // If we just tombstoned the entry point, find a live replacement so
+    // future searches have a valid starting node.
+    if (id == entryPointId_) {
+        bool replaced = false;
+
+        // Walk from the highest layer downward for the best chance of finding
+        // a well-connected live node quickly.
+        for (int lc = maxCurrentLayer_; lc >= 0 && !replaced; --lc) {
+            for (uint64_t nbr : nodes_[id]->neighbors[lc]) {
+                if (!deleted_.count(nbr)) {
+                    entryPointId_ = nbr;
+                    replaced      = true;
+                    break;
+                }
+            }
+        }
+
+        if (!replaced) {
+            // Every node reachable from the old entry point is also deleted.
+            // The index is effectively empty for search purposes.
+            hasEntryPoint_ = false;
+        }
+    }
+}
+
 template<typename T, typename DistanceFn>
 std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k, int efSearch) {
     std::vector<uint64_t> result;
@@ -176,6 +251,8 @@ std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k
     efSearch = std::max(efSearch, k);
     uint64_t currentEp = entryPointId_;
 
+    // Greedy descent: still traverse deleted nodes at upper layers because
+    // they may be the only bridge to the correct neighbourhood.
     for (int lc = maxCurrentLayer_; lc > 0; --lc) {
         bool changed = true;
         while (changed) {
@@ -187,7 +264,7 @@ std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k
                 float d = dist_(queryHash, nodes_[neighborId]->hash);
                 if (d < minDist) {
                     minDist = d;
-                    bestEp = neighborId;
+                    bestEp  = neighborId;
                     changed = true;
                 }
             }
@@ -197,6 +274,7 @@ std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k
 
     auto topResults = searchLayer(queryHash, currentEp, efSearch, 0);
 
+    // Trim to k.
     while (static_cast<int>(topResults.size()) > k) {
         topResults.pop();
     }
@@ -207,7 +285,19 @@ std::vector<uint64_t> HNSWIndex<T, DistanceFn>::search(const T& queryHash, int k
         topResults.pop();
     }
 
-    std::reverse(result.begin(), result.end());
+    // searchLayer already filters deleted nodes from topResults, but the
+    // greedy entry-point descent at upper layers may have landed on a deleted
+    // node that then became currentEp for layer-0 search.  That is safe
+    // because searchLayer handles a deleted entry point correctly.  This
+    // final pass is a belt-and-suspenders guard — it costs O(k) and
+    // catches any future code paths that might bypass searchLayer's filter.
+    result.erase(
+        std::remove_if(result.begin(), result.end(),
+                       [this](uint64_t id){ return deleted_.count(id) > 0; }),
+        result.end()
+    );
+
+    std::reverse(result.begin(), result.end()); // closest first
     return result;
 }
 
@@ -326,6 +416,33 @@ std::string escapeJSONString(const std::string& input) {
     }
     return output;
 }
+// ---------------------------------------------------------------------------
+// rebuildFrom — free function, not a member, because it needs to construct a
+// fresh index.  It simply re-inserts every live node from `old` into a new
+// index with the same hyperparameters.
+//
+// Insertion order is unspecified (unordered_map iteration order), which means
+// the rebuilt graph's layer assignments will differ from the original.  That
+// is intentional and expected — ANN quality typically improves because the
+// graph is no longer biased by edges that used to connect to deleted nodes.
+// ---------------------------------------------------------------------------
+template<typename T, typename DistanceFn>
+HNSWIndex<T, DistanceFn> rebuildFrom(const HNSWIndex<T, DistanceFn>& old) {
+    HNSWIndex<T, DistanceFn> fresh(
+        old.getM(),
+        old.getM_max0(),
+        old.getEfConstruction(),
+        DistanceFn{}
+    );
+
+    for (uint64_t id : old.getAllIds()) {
+        if (!old.isDeleted(id)) {
+            fresh.insert(id, old.getEmbedding(id));
+        }
+    }
+    return fresh;
+}
+
 
 template<typename T, typename DistanceFn>
 std::string HNSWIndex<T, DistanceFn>::exportGraphJSON(
@@ -365,3 +482,10 @@ std::string HNSWIndex<T, DistanceFn>::exportGraphJSON(
 // Explicit template instantiations — exactly these two flavors are usable.
 template class HNSWIndex<uint64_t, HammingDistance>;
 template class HNSWIndex<std::vector<float>, CosineDistance>;
+
+
+// Explicit instantiations for the free rebuild function.
+template HNSWIndex<uint64_t, HammingDistance>
+    rebuildFrom(const HNSWIndex<uint64_t, HammingDistance>&);
+template HNSWIndex<std::vector<float>, CosineDistance>
+    rebuildFrom(const HNSWIndex<std::vector<float>, CosineDistance>&);
