@@ -6,6 +6,9 @@ const btnText = document.querySelector('.btn-text');
 const loader = document.querySelector('.loader');
 const resultsContainer = document.getElementById('results-container');
 const matchesGrid = document.getElementById('matches-grid');
+const loadBtn = document.getElementById('load-btn');
+const datasetPathInput = document.getElementById('datasetPath');
+const loadStatus = document.getElementById('load-status');
 
 queryImageInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
@@ -49,6 +52,33 @@ searchForm.addEventListener('submit', async (e) => {
         btnText.classList.remove('hidden');
         loader.classList.add('hidden');
     }
+});
+
+loadBtn.addEventListener('click', async () => {
+    const datasetPath = datasetPathInput.value.trim();
+    if (!datasetPath) return;
+
+    loadBtn.disabled = true;
+    loadStatus.textContent = 'Loading…';
+
+    try {
+        const res = await fetch('/api/load', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ datasetPath })
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        loadStatus.textContent = `Ready — ${data.count} images loaded`;
+        submitBtn.disabled = false;
+        if (data.graph) {
+            resultsContainer.classList.remove('hidden');
+            setTimeout(() => renderGraph(data.graph), 0);
+        }
+    } catch (e) {
+        loadStatus.textContent = `Error: ${e.message}`;
+    }
+    loadBtn.disabled = false;
 });
 
 function renderResults(data) {
@@ -191,11 +221,6 @@ function renderResults(data) {
         matchesGrid.innerHTML = '<p style="color: var(--text-secondary)">No matches were found.</p>';
     }
     
-    // Render Graph
-    if (data.graph) {
-        renderGraph(data.graph);
-    }
-    
     resultsContainer.classList.remove('hidden');
 }
 
@@ -208,8 +233,13 @@ function renderGraph(graphData) {
         return;
     }
     
+    // Cap nodes to keep rendering fast
+    const MAX_NODES = 150;
+    const visibleNodes = graphData.nodes.slice(0, MAX_NODES);
+    const visibleIds = new Set(visibleNodes.map(n => n.id));
+
     // Map graph nodes to vis.js format
-    const nodesDataSet = new vis.DataSet(graphData.nodes.map(n => {
+    const nodesDataSet = new vis.DataSet(visibleNodes.map(n => {
         let labelName = `ID:${n.id}`;
         if (n.path && n.path !== 'unknown') {
             labelName = n.path.split(/[/\\]/).pop().substring(0, 10);
@@ -223,16 +253,18 @@ function renderGraph(graphData) {
             shape: 'dot'
         };
     }));
-    
-    // Map edges
-    const edgesDataSet = new vis.DataSet(graphData.edges.map(e => ({
-        from: e.source,
-        to: e.target,
-        color: { color: 'rgba(255,255,255,0.15)', highlight: '#ec4899' }
-    })));
-    
+
+    // Map edges (only between visible nodes)
+    const edgesDataSet = new vis.DataSet(graphData.edges
+        .filter(e => visibleIds.has(e.source) && visibleIds.has(e.target))
+        .map(e => ({
+            from: e.source,
+            to: e.target,
+            color: { color: 'rgba(255,255,255,0.15)', highlight: '#ec4899' }
+        })));
+
     const data = { nodes: nodesDataSet, edges: edgesDataSet };
-    
+
     const options = {
         nodes: {
             font: { color: '#f8fafc', size: 12, face: 'Inter' },
@@ -241,7 +273,7 @@ function renderGraph(graphData) {
         physics: {
             forceAtlas2Based: { gravitationalConstant: -80, centralGravity: 0.01, springLength: 80, springConstant: 0.08 },
             solver: 'forceAtlas2Based',
-            stabilization: { iterations: 150 }
+            stabilization: { enabled: false }
         },
         interaction: { hover: true, tooltipDelay: 200 }
     };

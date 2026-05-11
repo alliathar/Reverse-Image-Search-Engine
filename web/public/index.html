@@ -22,11 +22,14 @@
         </header>
 
         <section class="glass-card upload-section">
+            <div class="input-group">
+                <label for="datasetPath">Dataset Local Folder Path</label>
+                <input type="text" id="datasetPath" name="datasetPath" placeholder="e.g. /mnt/d/Images/Dataset" required>
+                <button id="load-btn" class="submit-btn">Load Dataset</button>
+                <p id="load-status"></p>
+            </div>
+
             <form id="search-form">
-                <div class="input-group">
-                    <label for="datasetPath">Dataset Local Folder Path</label>
-                    <input type="text" id="datasetPath" name="datasetPath" placeholder="e.g. /mnt/d/Images/Dataset" required>
-                </div>
                 <div class="input-group">
                     <label for="category">Category (Optional)</label>
                     <input type="text" id="category" name="category" placeholder="e.g. cars, dogs, or leave blank for all">
@@ -39,7 +42,7 @@
                     <input type="file" id="queryImage" name="queryImage" accept="image/*" required>
                     <div id="file-name-display">No file selected</div>
                 </div>
-                <button type="submit" class="submit-btn" id="submit-btn">
+                <button type="submit" class="submit-btn" id="submit-btn" disabled>
                     <span class="btn-text">Initiate Scan</span>
                     <span class="loader hidden"></span>
                 </button>

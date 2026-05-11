@@ -1,74 +1,82 @@
 const express = require('express');
 const multer = require('multer');
-const { execFile } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
+const readline = require('readline');
 
 const app = express();
 const port = 3000;
 
 app.use(cors());
 app.use(express.static('public')); // Serve the frontend
-
+app.use(express.json());
 // Multer config for query image upload
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir);
 }
+
 const upload = multer({ dest: 'uploads/' });
+// Path to compiled C++ Executable
+const exeName = process.platform === 'win32' ? 'ReverseImageSearch.exe' : 'ReverseImageSearch';
+const exePath = path.join(__dirname, '..', 'build', exeName);    
+
+let pendingResolve = null;
+let queue = Promise.resolve();
+
+const engine = spawn(exePath);
+
+const rl = readline.createInterface({ input: engine.stdout });
+rl.on('line', (line) => {
+    if (pendingResolve) {
+        const resolve = pendingResolve;
+        pendingResolve = null;
+        resolve(line);
+    }
+});
+engine.stderr.on('data', (d) => console.error('[engine]', d.toString()));
+engine.on('exit', (code) => console.error('[engine] exited with code', code));
+
+function sendCommand(cmd) {
+    return new Promise((resolve, reject) => {
+        queue = queue.then(() => new Promise((done) => {
+            pendingResolve = (line) => { done(); resolve(line); };
+            engine.stdin.write(cmd + '\n');
+        }));
+        queue.catch(reject);
+    });
+}
+
+app.post('/api/load', async (req, res) => {
+    const { datasetPath } = req.body;
+    if (!datasetPath) return res.status(400).json({ error: 'Missing datasetPath.' });
+    try {
+        const line = await sendCommand(`LOAD ${datasetPath}`);
+        res.json(JSON.parse(line));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to load dataset.' });
+    }
+});
 
 // API endpoint for search
-app.post('/api/search', upload.single('queryImage'), (req, res) => {
-    if (!req.file || !req.body.datasetPath) {
-        return res.status(400).json({ error: 'Missing query image or dataset path.' });
-    }
+app.post('/api/search', upload.single('queryImage'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Missing query image.' });
 
     const queryImagePath = req.file.path;
-    const datasetPath = req.body.datasetPath;
     const category = req.body.category || 'all';
 
-    // Path to compiled C++ Executable
-    const exeName = process.platform === 'win32' ? 'ReverseImageSearch.exe' : 'ReverseImageSearch';
-    const exePath = path.join(__dirname, '..', 'build', exeName);    
-    // We allow up to 50MB of buffer because the graph JSON could be large for large datasets
-    execFile(exePath, ['search', queryImagePath, datasetPath, category], { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
-        // Clean up the uploaded file
+    try {
+        const line = await sendCommand(`SEARCH ${queryImagePath} ${category}`);
         fs.unlink(queryImagePath, () => {});
-
-        if (error) {
-            console.error('Execution error:', error);
-            console.error('stderr:', stderr);
-            
-            // Try to extract specific error from C++ output
-            try {
-                const jsonStartOffset = stdout.indexOf('{');
-                if (jsonStartOffset !== -1) {
-                    const cleanJsonStr = stdout.substring(jsonStartOffset);
-                    const parsed = JSON.parse(cleanJsonStr);
-                    if (parsed.error) {
-                        return res.status(500).json({ error: parsed.error });
-                    }
-                }
-            } catch (e) {}
-
-            return res.status(500).json({ error: 'Failed to process image search.' });
-        }
-
-        try {
-            const jsonStartOffset = stdout.indexOf('{');
-            if (jsonStartOffset === -1) throw new Error('No JSON output found from engine.');
-            const cleanJsonStr = stdout.substring(jsonStartOffset);
-            
-            const results = JSON.parse(cleanJsonStr);
-            res.json(results);
-        } catch (e) {
-            console.error('JSON parsing error:', e);
-            console.log('Raw output:', stdout);
-            res.status(500).json({ error: 'Failed to parse engine output.' });
-        }
-    });
+        res.json(JSON.parse(line));
+    } catch (e) {
+        fs.unlink(queryImagePath, () => {});
+        res.status(500).json({ error: 'Failed to process image search.' });
+    }
 });
+
 
 // API endpoint to serve arbitrary local target images to the frontend securely
 app.get('/api/image', (req, res) => {
