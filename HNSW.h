@@ -10,6 +10,8 @@
 #include <cmath>
 #include <string>
 #include <utility>
+#include <ostream>
+#include <istream>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -77,6 +79,11 @@ public:
         for (const auto& p : nodes_) ids.push_back(p.first);
         return ids;
     }
+
+    // Binary serialization — write the entire index to a stream.
+    void save(std::ostream& os) const;
+    // Binary deserialization — clear current state and rebuild from stream.
+    void load(std::istream& is);
 
 private:
     int M_;

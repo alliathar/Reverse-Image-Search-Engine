@@ -169,7 +169,13 @@ void ImageProcessor::initialize(const std::string& modelPath) {
     auto s = std::make_unique<OrtState>();
     s->session_options.SetIntraOpNumThreads(1);
     s->session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    s->session = std::make_unique<Ort::Session>(s->env, modelPath.c_str(), s->session_options);
+#ifdef _WIN32
+    std::wstring w_modelPath(modelPath.begin(), modelPath.end());
+    const wchar_t* path_c_str = w_modelPath.c_str();
+#else
+    const char* path_c_str = modelPath.c_str();
+#endif
+    s->session = std::make_unique<Ort::Session>(s->env, path_c_str, s->session_options);
 
     auto input_name_alloc = s->session->GetInputNameAllocated(0, s->allocator);
     auto output_name_alloc = s->session->GetOutputNameAllocated(0, s->allocator);
