@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chad De API | Neural Image Engine</title>
+    <title>Nexus | Neural Image Engine</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <!-- vis-network for Graph Visualization -->
@@ -17,45 +17,116 @@
 
     <main class="app-container">
         <header>
-            <h1 class="gradient-text">Chad De API</h1>
+            <h1 class="gradient-text">Nexus API</h1>
             <p>HNSW Accelerated Reverse Image Matcher</p>
         </header>
 
         <section class="glass-card upload-section">
+            <div class="input-group">
+                <label for="datasetPath">Dataset Folder</label>
+                <div class="path-row">
+                    <input type="text" id="datasetPath" name="datasetPath" placeholder="No folder selected" readonly>
+                    <button type="button" id="browse-btn" class="secondary-btn">Browse…</button>
+                </div>
+                <button id="load-btn" class="submit-btn" disabled>Load Dataset</button>
+                <p id="load-status"></p>
+            </div>
+
             <form id="search-form">
                 <div class="input-group">
-                    <label for="datasetPath">Dataset Local Folder Path</label>
-                    <input type="text" id="datasetPath" name="datasetPath" placeholder="e.g. C:\Images\Dataset" required>
+                    <label for="search-mode">Search Mode</label>
+                    <select id="search-mode" name="mode">
+                        <option value="normal">Normal — closest matches across all categories</option>
+                        <option value="category">Category-wise — closest matches in one category</option>
+                        <option value="negative">Negative — furthest matches (least similar)</option>
+                        <option value="multi">Multi-Image — closest to combined query</option>
+                    </select>
+                </div>
+                <div class="input-group hidden" id="category-group">
+                    <label>Categories</label>
+                    <div class="multi-category" id="category-widget">
+                        <button type="button" class="multi-category-trigger" id="category-trigger" disabled>
+                            <span id="category-summary">Load a dataset first…</span>
+                            <span class="multi-category-caret">▾</span>
+                        </button>
+                        <div class="multi-category-popup hidden" id="category-popup">
+                            <p class="multi-category-hint">Click to cycle: neutral → include → exclude</p>
+                            <ul id="category-options"></ul>
+                        </div>
+                    </div>
                 </div>
                 <div class="upload-wrapper">
                     <label for="queryImage" class="file-label">
                         <div class="upload-icon">⬆</div>
-                        <span>Select Query Image</span>
+                        <span id="upload-label-text">Select Query Image</span>
                     </label>
                     <input type="file" id="queryImage" name="queryImage" accept="image/*" required>
                     <div id="file-name-display">No file selected</div>
                 </div>
-                <button type="submit" class="submit-btn" id="submit-btn">
+                <button type="submit" class="submit-btn" id="submit-btn" disabled>
                     <span class="btn-text">Initiate Scan</span>
                     <span class="loader hidden"></span>
                 </button>
             </form>
         </section>
 
-        <section class="results-container hidden" id="results-container">
-            <div class="graph-section glass-card">
+        <section class="results-container hidden graph-hidden" id="results-container">
+            <div class="graph-section glass-card hidden" id="graph-section">
                 <h2>Neural Web Map</h2>
                 <div id="network-canvas"></div>
             </div>
-            
+
             <div class="matches-section">
-                <h2>Top Matches</h2>
+                <div class="matches-header">
+                    <h2>Top Matches</h2>
+                    <button type="button" class="graph-toggle" id="graph-toggle">Show neural map</button>
+                </div>
+                <div class="query-preview glass-card hidden" id="query-preview">
+                    <span class="query-preview-label">Your query</span>
+                    <div class="query-thumbs" id="query-thumbs"></div>
+                </div>
+                
+                <!-- New Feature: Uniqueness Widget -->
+                <div id="uniqueness-widget" class="uniqueness-card glass-card hidden">
+                    <div class="gauge-container">
+                        <svg viewBox="0 0 100 50" class="gauge">
+                            <path class="gauge-bg" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#333" stroke-width="10"/>
+                            <path id="gauge-fill" class="gauge-fill" d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke-width="10"/>
+                        </svg>
+                        <div id="uniqueness-value" class="gauge-value">0%</div>
+                    </div>
+                    <div class="uniqueness-text">
+                        <h3>Dataset Uniqueness</h3>
+                        <p id="uniqueness-desc">Analyzing visual characteristics...</p>
+                    </div>
+                </div>
+
                 <div class="matches-grid" id="matches-grid">
                     <!-- Cards injected via JS -->
                 </div>
             </div>
         </section>
     </main>
+
+    <div class="modal-backdrop hidden" id="browse-modal">
+        <div class="modal glass-card">
+
+            <div class="modal-header">
+                <h3>Choose dataset folder</h3>
+                <button type="button" class="modal-close" id="browse-close" aria-label="Close">×</button>
+            </div>
+            <div class="modal-toolbar">
+                <button type="button" class="secondary-btn" id="browse-up" disabled>↑ Up</button>
+                <span class="modal-path" id="browse-current"></span>
+            </div>
+            <input type="text" id="browse-filter" class="modal-filter" placeholder="Type to filter folders…" autocomplete="off">
+            <ul class="folder-list" id="browse-list"></ul>
+            <div class="modal-footer">
+                <button type="button" class="secondary-btn" id="browse-cancel">Cancel</button>
+                <button type="button" class="submit-btn" id="browse-select">Select this folder</button>
+            </div>
+        </div>
+    </div>
 
     <script src="script.js"></script>
 </body>

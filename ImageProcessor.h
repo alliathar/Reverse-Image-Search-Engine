@@ -6,13 +6,15 @@
 
 class ImageProcessor {
 public:
-    // Creates a 64-bit pHash from a given image filepath using full 2D DCT
+    // --- CNN embedding (MobileNetV3-Small via ONNX Runtime) ---
+    // Lazily loads the ONNX model on first call.
+    static void initialize(const std::string& modelPath);
+    // 576-d L2-normalized feature vector. Distance is cosine.
+    static std::vector<float> generateEmbedding(const std::string& filepath);
+    // Number of dimensions in the embedding. Valid after initialize().
+    static size_t embeddingDim();
+
+    // --- 64-bit DCT pHash (legacy) ---
+    // Produces a 64-bit perceptual hash. Distance is Hamming popcount.
     static uint64_t generatePHash(const std::string& filepath);
-
-private:
-    // Load via stb_image and resize to 32x32, returning grayscale float map
-    static std::vector<float> loadAndPreprocess(const std::string& filepath);
-
-    // 2D Discrete Cosine Transform on 32x32 image and extract top-left 8x8 to produce 64-bit hash
-    static uint64_t computeHashFromPixels(const std::vector<float>& pixels);
 };

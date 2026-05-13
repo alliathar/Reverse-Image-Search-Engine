@@ -1,6 +1,9 @@
 # Build directories
 build/
-
+.export_venv/
+third_party/onnxruntime/
+models/
+docs/
 # Executables and artifacts
 *.exe
 *.obj
